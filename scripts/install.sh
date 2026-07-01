@@ -36,7 +36,7 @@ if [ "$OS" = "darwin" ] && [ "$ARCH" = "x64" ]; then
   echo "  git clone https://github.com/$REPO && cd open-dynamic-workflows" >&2
   echo "  npm ci && npm run build && npm i -g ." >&2
   echo "then copy the skill:" >&2
-  echo "  cp -r skill ~/.claude/skills/open-dynamic-workflows" >&2
+  echo "  cp -r skills/open-dynamic-workflows ~/.claude/skills/open-dynamic-workflows" >&2
   exit 1
 fi
 
@@ -78,15 +78,15 @@ if [ ! -d "$HOME/.claude" ]; then
   fi
 fi
 echo "→ installing skill → $SKILL_DIR"
-mkdir -p "$TMP/skill/references"
-RAW="https://raw.githubusercontent.com/$REPO/$REF/skill"
-curl -fSL "$RAW/SKILL.md"                 -o "$TMP/skill/SKILL.md"
-curl -fSL "$RAW/references/primitives.md" -o "$TMP/skill/references/primitives.md"
-curl -fSL "$RAW/references/adapters.md"   -o "$TMP/skill/references/adapters.md"
+mkdir -p "$TMP/open-dynamic-workflows/references"
+RAW="https://raw.githubusercontent.com/$REPO/$REF/skills/open-dynamic-workflows"
+curl -fSL "$RAW/SKILL.md"                 -o "$TMP/open-dynamic-workflows/SKILL.md"
+curl -fSL "$RAW/references/primitives.md" -o "$TMP/open-dynamic-workflows/references/primitives.md"
+curl -fSL "$RAW/references/adapters.md"   -o "$TMP/open-dynamic-workflows/references/adapters.md"
 mkdir -p "$SKILL_DIR/references"
-mv -f "$TMP/skill/SKILL.md" "$SKILL_DIR/SKILL.md"
-mv -f "$TMP/skill/references/primitives.md" "$SKILL_DIR/references/primitives.md"
-mv -f "$TMP/skill/references/adapters.md" "$SKILL_DIR/references/adapters.md"
+mv -f "$TMP/open-dynamic-workflows/SKILL.md" "$SKILL_DIR/SKILL.md"
+mv -f "$TMP/open-dynamic-workflows/references/primitives.md" "$SKILL_DIR/references/primitives.md"
+mv -f "$TMP/open-dynamic-workflows/references/adapters.md" "$SKILL_DIR/references/adapters.md"
 
 echo "✓ installed $("$BIN_DIR/odw" --version)"
 case ":$PATH:" in

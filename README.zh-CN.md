@@ -103,7 +103,7 @@ ODW 本来就是给 coding agent 用的,最省事的就是让它自己装。把�
 > 然后运行 `odw --version` 确认。从现在起,遇到大到值得扇出的任务,
 > 就写一个 ODW workflow 并用 `odw run` 运行它。
 
-它会跑这个脚本、加载 [skill](skill/zh-CN/SKILL.md)([English](skill/SKILL.md)),然后立刻就能写并跑 workflow。
+它会跑这个脚本、加载 [skill](skills/open-dynamic-workflows/zh-CN/SKILL.md)([English](skills/open-dynamic-workflows/SKILL.md)),然后立刻就能写并跑 workflow。
 
 ### 2. 一键脚本
 
@@ -125,9 +125,9 @@ curl -fsSL https://raw.githubusercontent.com/xz1220/open-dynamic-workflows/main/
 gunzip odw-darwin-arm64.gz && chmod +x odw-darwin-arm64
 mv odw-darwin-arm64 ~/.local/bin/odw
 
-# b) skill —— 把 skill/ 拷进 agent 的 skills 目录
+# b) skill —— 把 skills/open-dynamic-workflows/ 拷进 agent 的 skills 目录
 git clone https://github.com/xz1220/open-dynamic-workflows.git
-cp -r open-dynamic-workflows/skill ~/.claude/skills/open-dynamic-workflows
+cp -r open-dynamic-workflows/skills/open-dynamic-workflows ~/.claude/skills/open-dynamic-workflows
 ```
 
 或者,**等 `odw` 发布到 npm 之后**(目前还没有——见 [开发](#开发))、且你有 Node ≥20,
@@ -196,7 +196,7 @@ odw run examples/fan-out-reduce.js --wait --args '{"question": "Design a rate li
 
 下一步需要"全量结果一次到位"(去重、计票、综合)时用 **`parallel`**;多阶段处理默认用
 **`pipeline`**。归并要保持顺序无关——按"谁先跑完"分支会破坏可复现性。完整参考见
-[`skill/references/primitives.md`](skill/references/primitives.md)。
+[`skills/open-dynamic-workflows/references/primitives.md`](skills/open-dynamic-workflows/references/primitives.md)。
 
 ## 运行与观测
 
@@ -411,7 +411,7 @@ ODW 所对齐的 Claude Code 方言背景见
 
 ## 作为 skill 使用
 
-[`skill/SKILL.md`](skill/SKILL.md)(简体中文版:[`skill/zh-CN/SKILL.md`](skill/zh-CN/SKILL.md))
+[`skills/open-dynamic-workflows/SKILL.md`](skills/open-dynamic-workflows/SKILL.md)(简体中文版:[`skills/open-dynamic-workflows/zh-CN/SKILL.md`](skills/open-dynamic-workflows/zh-CN/SKILL.md))
 让宿主 agent 仅凭文档就能编写并运行 workflow——把它装进你的 agent 的 skills 目录
 (Codex CLI → `~/.codex/skills/`,Claude Code → 它的 skills 目录)。
 

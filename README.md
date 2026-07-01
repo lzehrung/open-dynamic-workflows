@@ -110,7 +110,7 @@ this to your agent (Claude Code, Codex, Gemini, …):
 > directory, then run `odw --version` to confirm. From now on, when a task is big
 > enough to fan out, write an ODW workflow and run it with `odw run`.
 
-It runs the script, picks up the [skill](skill/SKILL.md), and can author and run
+It runs the script, picks up the [skill](skills/open-dynamic-workflows/SKILL.md), and can author and run
 workflows immediately.
 
 ### 2. One-command script
@@ -134,9 +134,9 @@ Prefer not to pipe `curl` into `sh`? Grab the asset for your OS/arch from
 gunzip odw-darwin-arm64.gz && chmod +x odw-darwin-arm64
 mv odw-darwin-arm64 ~/.local/bin/odw
 
-# b) the skill — copy skill/ into your agent's skills dir
+# b) the skill — copy skills/open-dynamic-workflows/ into your agent's skills dir
 git clone https://github.com/xz1220/open-dynamic-workflows.git
-cp -r open-dynamic-workflows/skill ~/.claude/skills/open-dynamic-workflows
+cp -r open-dynamic-workflows/skills/open-dynamic-workflows ~/.claude/skills/open-dynamic-workflows
 ```
 
 Or, **once `odw` is published to npm** (not yet — see [Develop](#develop)) and you
@@ -212,7 +212,7 @@ control flow (loops, `if`, dedup) — no imports:
 Use **`parallel`** when the next step needs the whole batch at once (dedup,
 tally, synthesis); **`pipeline`** for multi-stage work (the default). Keep
 reductions order-independent — branching on *which agent finished first* breaks
-reproducibility. Full reference: [`skill/references/primitives.md`](skill/references/primitives.md).
+reproducibility. Full reference: [`skills/open-dynamic-workflows/references/primitives.md`](skills/open-dynamic-workflows/references/primitives.md).
 
 ## Run and observe
 
@@ -447,7 +447,7 @@ Background on the Claude Code dialect ODW aligns with:
 
 ## Use as a skill
 
-[`skill/SKILL.md`](skill/SKILL.md) (简体中文: [`skill/zh-CN/SKILL.md`](skill/zh-CN/SKILL.md))
+[`skills/open-dynamic-workflows/SKILL.md`](skills/open-dynamic-workflows/SKILL.md) (简体中文: [`skills/open-dynamic-workflows/zh-CN/SKILL.md`](skills/open-dynamic-workflows/zh-CN/SKILL.md))
 teaches a host agent to author and run workflows from documentation alone —
 install it into your agent's skills directory (Codex CLI → `~/.codex/skills/`,
 Claude Code → its skills dir).

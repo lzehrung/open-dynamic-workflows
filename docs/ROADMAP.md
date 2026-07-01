@@ -145,5 +145,5 @@ Open Dynamic Workflows (ODW)
 - `src/workflows/resolve.ts` — 命名解析 resolver:14-16
 - `src/runtime/server.ts` — API 端点（拓扑事件 / SSE）
 - `src/dashboard.html` — 待升级为数据驱动 DAG（单一 bundle 工件）
-- `skill/SKILL.md` — 待复核
+- `skills/open-dynamic-workflows/SKILL.md` — 待复核
 - `tests/` — 待加双兼容静态审计 + fixtures

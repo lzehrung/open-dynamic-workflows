@@ -188,7 +188,7 @@ odw(cli) ──> runtime(worker) ──加载并转换──> workflow 脚本(.j
 
 ### M6 — skill + 文档 + 示例
 > 依赖：M5。
-- 重写 `skill/SKILL.md`（=skills.md）+ `references/`（JS 版原语参考）；补 `examples/`（fan-out→reduce、对抗式校验、loop-until-dry）；README/agent 自安装提示词改 npm。
+- 重写 `skills/open-dynamic-workflows/SKILL.md`（=skills.md）+ `references/`（JS 版原语参考）；补 `examples/`（fan-out→reduce、对抗式校验、loop-until-dry）；README/agent 自安装提示词改 npm。
 - **验收**：示例全部能 `run` 跑通（mock 适配器）；文档自检无指向不存在的命令/原语。
 
 ---
@@ -209,7 +209,7 @@ odw(cli) ──> runtime(worker) ──加载并转换──> workflow 脚本(.j
 
 1. **能力达成**：任一配置好的 coding-agent CLI，可被一段 **Claude 方言的 JS workflow 脚本**编排成 fan-out→reduce→synthesize / 对抗式校验 / loop-until-dry，且能后台运行、可观测、可停止。
 2. **可移植 / 同源**：`deep-research.js` 这类为 Claude Code 写的脚本**原样可跑**；换一组适配器即可换底层 agent。
-3. **可被 agent 自助使用**：宿主 agent 仅凭 `skill/SKILL.md` 即可写出并运行新 workflow。
+3. **可被 agent 自助使用**：宿主 agent 仅凭 `skills/open-dynamic-workflows/SKILL.md` 即可写出并运行新 workflow。
 
 ---
 

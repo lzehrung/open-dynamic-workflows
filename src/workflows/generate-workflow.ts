@@ -8,7 +8,7 @@
  * dashboard.generated.ts: the SEA binary has no repo files, and the server
  * launches it inline via startRunFromSource). The dialect documentation is NOT
  * baked in here — the server injects it per run as `args.dialectDoc` (from
- * src/skill.generated.ts), so skill/SKILL.md stays the single source of truth.
+ * src/skill.generated.ts), so skills/open-dynamic-workflows/SKILL.md stays the single source of truth.
  *
  * args contract: { task: string, dialectDoc: string, patternsDigest: string }
  * result: { script: string, meta: WorkflowMeta, attempts: number }

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ultracode"
+  short_description: "Exhaustive multi-agent work mode"
+  default_prompt: "Use $ultra-mode to solve this task with explicit Ultracode coverage, adversarial verification, and synthesis."

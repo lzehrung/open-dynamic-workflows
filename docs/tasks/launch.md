@@ -23,7 +23,7 @@
 
 | # | 决策 | 内容 | 接受的代价 |
 |---|---|---|---|
-| **D1** | 生成方式 = **agent 自由生成** | 把 workflow 方言文档（`skill/SKILL.md`）+ examples 模式摘要喂给所选 agent，针对任务自由编写脚本；**必须配 loader 编译校验 + 报错回喂修复循环**（≤3 次尝试），不允许裸生成 | 首次成功率非 100%，依赖修复循环兜底；一次生成 = 1–3 次 agent 调用的成本 |
+| **D1** | 生成方式 = **agent 自由生成** | 把 workflow 方言文档（`skills/open-dynamic-workflows/SKILL.md`）+ examples 模式摘要喂给所选 agent，针对任务自由编写脚本；**必须配 loader 编译校验 + 报错回喂修复循环**（≤3 次尝试），不允许裸生成 | 首次成功率非 100%，依赖修复循环兜底；一次生成 = 1–3 次 agent 调用的成本 |
 | **D2** | 生成载体 = **生成本身就是一个 odw workflow** | 内置 `generate-workflow.js`（Generate → Validate → Repair 多步编排），生成过程作为一个 run 出现在 Jobs，live DAG 全程可观测——「以 dynamic workflows 为核心」贯彻到生成环节 | 比 server 进程内直调 Bridge 多几秒 detached worker 启动开销；换来生成过程可观测、失败可追溯、修复循环用 workflow 原语自然表达 |
 | **D3** | 运行确认 = **预览确认再跑** | 生成完成后展示脚本 + 从 meta 提取的 phase 结构预览（复用 DAG 渲染器 static 模式），用户点 Run 才执行 | 多一次点击；换来 agent 动用户文件前有确认闸 + 不满意可改任务重新生成 |
 | **D4** | 脚本归宿 = **默认即弃 + 一键收藏** | 生成的脚本落在 run 目录里随 run 留档；跑完结果页提供「Save to Workspace」存为可复用 workflow（进管理目录，Workspace 立即可见） | 多一个按钮的工程量；换来好任务沉淀成资产、Workspace 不被一次性脚本污染 |
@@ -79,7 +79,7 @@ POST /api/runs/:id/control    →（已存在）SPA 解禁调用，仅 ODW provi
 
 ### 3.2 内置生成 workflow（D1+D2 的核心交付物）
 
-`src/workflows/generate-workflow.ts` 导出脚本源字符串（与 `dashboard.generated.ts` 同理由：SEA 二进制里没有仓库文件，必须 embed；`skill/SKILL.md` 同样在构建期 embed 成 `src/skill.generated.ts`，server 起 generate run 时作为 `args.dialectDoc` 注入——脚本保持纯净、文档单一来源）。
+`src/workflows/generate-workflow.ts` 导出脚本源字符串（与 `dashboard.generated.ts` 同理由：SEA 二进制里没有仓库文件，必须 embed；`skills/open-dynamic-workflows/SKILL.md` 同样在构建期 embed 成 `src/skill.generated.ts`，server 起 generate run 时作为 `args.dialectDoc` 注入——脚本保持纯净、文档单一来源）。
 
 脚本结构（meta.phases = Generate / Validate / Repair）：
 
@@ -156,7 +156,7 @@ throw new Error("3 次尝试后仍未通过编译校验：" + lastErrors)
 - [x] **L2 — 内置 generate-workflow + 文档 embed**
   - 做法：§3.2。`scripts/embed-skill.mjs`（仿 embed-dashboard）→ `src/skill.generated.ts`；`src/workflows/generate-workflow.ts` 导出脚本串 + patternsDigest；authoring/repair prompt 含方言硬约束清单。
   - DoD：mock adapter 下——首次即合法脚本→1 次过；故意先回坏脚本（用了 Date.now / meta 非字面量）→ Repair 收敛；3 次全坏→run failed 且 error.json 含末次报错。真 adapter 冒烟：一个真实任务生成出可 `odw run` 的脚本。
-  - 锚点：`src/workflows/generate-workflow.ts`、`scripts/embed-skill.mjs`、`skill/SKILL.md`、`examples/`。
+  - 锚点：`src/workflows/generate-workflow.ts`、`scripts/embed-skill.mjs`、`skills/open-dynamic-workflows/SKILL.md`、`examples/`。
   - 依赖：L1。
 
 - [x] **L3 — server 写端点 + writeGuard/Host 校验**
@@ -201,7 +201,7 @@ throw new Error("3 次尝试后仍未通过编译校验：" + lastErrors)
 - `src/runtime/server.ts` — 新端点 + writeGuard + Host 校验（`controlRun` 的 CSRF 检查抽出复用，`server.ts:291`）
 - `src/workflows/generate-workflow.ts`（新）— 内置生成 workflow 源串 + patternsDigest
 - `scripts/embed-skill.mjs`（新）→ `src/skill.generated.ts` — SKILL.md 进二进制
-- `skill/SKILL.md` — workflow 方言权威文档（authoring prompt 的 `dialectDoc`）
+- `skills/open-dynamic-workflows/SKILL.md` — workflow 方言权威文档（authoring prompt 的 `dialectDoc`）
 - `examples/` — 八个编排模式（patternsDigest 的策展来源）
 - `web/src/views/launch.ts`（新）、`web/src/views/job.ts`、`web/src/api.ts`、`web/src/shell.ts`、`web/src/main.ts`
 - `docs/tasks/gui.md` — 被修订的铁律出处（§0、§2.1、§7）

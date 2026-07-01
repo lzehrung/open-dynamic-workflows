@@ -109,6 +109,27 @@ test("tournament.js runs a bracket to a single winner", async () => {
   assert.ok(Array.isArray(r.rounds) && r.rounds.length >= 1);
 });
 
+test("ultra-mode.js plans, fans out, reviews, and synthesizes", async () => {
+  const { state, result, error } = await runExample("ultra-mode.js", {
+    task: "Plan a safe refactor",
+    intensity: "lite",
+    lanes: 3,
+    reviewers: 2,
+  });
+  assert.equal(state, "done", JSON.stringify(error));
+  const r = result as {
+    plan: { workstreams: unknown[] };
+    lanes: unknown[];
+    reviews: unknown[];
+    final: { answer: string; actionPlan: unknown[] };
+  };
+  assert.ok(Array.isArray(r.plan.workstreams));
+  assert.ok(Array.isArray(r.lanes) && r.lanes.length >= 1);
+  assert.ok(Array.isArray(r.reviews) && r.reviews.length >= 1);
+  assert.equal(typeof r.final.answer, "string");
+  assert.ok(Array.isArray(r.final.actionPlan));
+});
+
 test("agent-daily-digest.js runs end-to-end (discover -> extract -> synthesize -> verify -> report)", async () => {
   const { state, result, error } = await runExample("agent-daily-digest.js", {
     date: "2026-06-04",
