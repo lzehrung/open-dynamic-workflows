@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { defaultConfig } from "../src/adapters/config.js";
+import { waitFor } from "../src/runtime/launcher.js";
 import { RunStore } from "../src/runtime/run-store.js";
 import {
   foldAgents,
@@ -372,5 +373,92 @@ test("HTTP: /api/workflows lists managed-dir workflows + detail with source", as
     rmSync(proj, { recursive: true, force: true });
     rmSync(globalWf, { recursive: true, force: true });
     rmSync(globalClaudeWf, { recursive: true, force: true });
+  }
+});
+
+test("HTTP: /api/settings exposes the live runtime config summary", async () => {
+  const root = tempRoot();
+  const proj = tempRoot();
+  const globalWf = tempRoot();
+  const globalClaudeWf = tempRoot();
+  const store = new RunStore(root);
+  const config = defaultConfig();
+  config.settings.workflowsRoot = globalWf;
+  config.settings.claudeWorkflowsRoot = globalClaudeWf;
+  config.settings.defaultAdapter = "codex";
+  const handle = await startServer({
+    store,
+    port: 0,
+    host: "127.0.0.1",
+    cwd: proj,
+    config,
+    configPath: "/tmp/odw.config.json",
+    claudeProjectsRoot: join(root, "no-claude"),
+  });
+  try {
+    const settings = await fetch(`${handle.url}/api/settings`).then((r) => r.json());
+    assert.equal(settings.cwd, proj);
+    assert.equal(settings.runsRoot, root);
+    assert.equal(settings.configPath, "/tmp/odw.config.json");
+    assert.equal(settings.writable, true);
+    assert.ok(settings.adapters.some((a: { name: string; command: string }) => a.name === "codex" && a.command));
+    assert.ok(settings.workflowRoots.some((r: { path: string }) => r.path === globalWf));
+    assert.ok(settings.workflowRoots.some((r: { path: string }) => r.path === globalClaudeWf));
+  } finally {
+    await handle.close();
+    rmSync(root, { recursive: true, force: true });
+    rmSync(proj, { recursive: true, force: true });
+    rmSync(globalWf, { recursive: true, force: true });
+    rmSync(globalClaudeWf, { recursive: true, force: true });
+  }
+});
+
+test("HTTP: Chat Host sessions persist messages and link a real ODW run", async () => {
+  const root = tempRoot();
+  const proj = tempRoot();
+  const store = new RunStore(root);
+  const handle = await startServer({
+    store,
+    port: 0,
+    host: "127.0.0.1",
+    cwd: proj,
+    claudeProjectsRoot: join(root, "no-claude"),
+  });
+  try {
+    const created = await fetch(`${handle.url}/api/chat/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ source: proj }),
+    }).then((r) => r.json());
+    assert.match(created.id, /^chat_/);
+    assert.equal(created.messages.length, 1);
+
+    const updated = await fetch(`${handle.url}/api/chat/sessions/${created.id}/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "Use ODW workflow routing for this local turn." }),
+    }).then((r) => r.json());
+    assert.equal(updated.linkedRuns.length, 1);
+    const runId = updated.linkedRuns[0].runId;
+    assert.equal(store.exists(runId), true);
+    assert.equal(store.readMeta(runId).origin, "chat");
+    assert.equal(store.readMeta(runId).workflowName, "chat-host-bridge");
+
+    await waitFor(store, runId, { timeoutMs: 5000 });
+
+    const hydrated = await fetch(`${handle.url}/api/chat/sessions/${created.id}`).then((r) => r.json());
+    assert.equal(hydrated.state, "done");
+    assert.equal(hydrated.linkedRuns[0].state, "done");
+    const tool = hydrated.messages.find((m: { role: string }) => m.role === "tool");
+    assert.equal(tool.tool.status, "done");
+    assert.match(tool.tool.result, /local Chat Host/);
+
+    const list = await fetch(`${handle.url}/api/chat/sessions`).then((r) => r.json());
+    assert.equal(list.length, 1);
+    assert.equal(list[0].linkedRuns, 1);
+  } finally {
+    await handle.close();
+    rmSync(root, { recursive: true, force: true });
+    rmSync(proj, { recursive: true, force: true });
   }
 });
