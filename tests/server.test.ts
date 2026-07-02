@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execPath } from "node:process";
 
 import { defaultConfig } from "../src/adapters/config.js";
 import { waitFor } from "../src/runtime/launcher.js";
@@ -438,11 +439,29 @@ test("HTTP: Chat Host sessions persist messages and link a real ODW run", async 
   const proj = tempRoot();
   const store = new RunStore(root);
   const prompts: string[] = [];
+  const mockAgent =
+    "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{" +
+    "process.stdout.write('mock ODW task result for: '+d.match(/User request:\\n([\\s\\S]*)/)?.[1].trim())})";
+  const configPath = join(proj, "odw.config.json");
+  writeFileSync(
+    configPath,
+    JSON.stringify({
+      defaultAdapter: "mock",
+      workspaceMode: "inplace",
+      adapters: { mock: { command: [execPath, "-e", mockAgent], stdin: "{prompt}" } },
+    }),
+  );
+  const config = defaultConfig();
+  config.settings.defaultAdapter = "mock";
+  config.settings.workspaceMode = "inplace";
+  config.adapters.mock = { name: "mock", command: [execPath, "-e", mockAgent], stdin: "{prompt}" };
   const handle = await startServer({
     store,
     port: 0,
     host: "127.0.0.1",
     cwd: proj,
+    config,
+    configPath,
     claudeProjectsRoot: join(root, "no-claude"),
     chatRunner: mockChatRunner(prompts),
   });
@@ -482,9 +501,11 @@ test("HTTP: Chat Host sessions persist messages and link a real ODW run", async 
     const tool = hydrated.messages.find((m: { role: string }) => m.role === "tool");
     assert.equal(tool.tool.status, "done");
     assert.equal(tool.tool.progress, 1);
-    assert.match(tool.tool.result, /local Chat Host/);
+    assert.match(tool.tool.result, /mock ODW task result/);
+    assert.match(tool.tool.result, /Use ODW workflow routing/);
     assert.equal(prompts.length, 1);
     assert.match(prompts[0]!, /ODW run /);
+    assert.match(prompts[0]!, /mock ODW task result/);
 
     const list = await fetch(`${handle.url}/api/chat/sessions`).then((r) => r.json());
     assert.equal(list.length, 1);

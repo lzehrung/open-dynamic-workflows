@@ -120,18 +120,28 @@ const CHAT_HOST_WORKFLOW_NAME = "chat-host-bridge";
 const CHAT_HOST_WORKFLOW_SOURCE = `
 export const meta = {
   name: "${CHAT_HOST_WORKFLOW_NAME}",
-  description: "Bridge a local Chat Host turn into the ODW run stream.",
-  phases: [{ title: "Capture" }, { title: "Respond" }],
+  description: "Run a local Chat Host task asynchronously and return its answer.",
+  phases: [{ title: "Capture" }, { title: "Execute" }, { title: "Return" }],
 }
 
 phase("Capture")
 log("Captured a local Chat Host turn.")
-phase("Respond")
-return {
-  summary: "The local Chat Host recorded this turn and linked it to the ODW run stream.",
-  prompt: args.prompt,
-  sessionId: args.sessionId,
-}
+const task = typeof args?.prompt === "string" ? args.prompt.trim() : ""
+if (!task) throw new Error("chat-host-bridge needs args.prompt")
+
+phase("Execute")
+const answer = await agent([
+  "You are executing an asynchronous Open Dynamic Workflows task requested from the Chat Host UI.",
+  "Complete the user's request as the primary deliverable.",
+  "Return the final answer only. Do not describe internal ODW plumbing unless it is directly relevant.",
+  "Prefer the user's language. Include concise source links or citations when the task depends on external facts.",
+  "",
+  "User request:",
+  task,
+].join("\\n"), { label: "chat-task" })
+
+phase("Return")
+return answer
 `;
 
 const TERMINAL_RUN_STATES = new Set<RunDisplayState>(["done", "failed", "stopped"]);
