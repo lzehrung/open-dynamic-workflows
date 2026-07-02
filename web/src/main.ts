@@ -39,6 +39,9 @@ let chatDraft = "";
 let activeChatId: string | null = null;
 let composingChatInput = false;
 let deferredRender = false;
+let chatScrollToBottomOnNextRender = false;
+
+const CHAT_STICKY_BOTTOM_PX = 32;
 
 function parseHash(): Route {
   const h = location.hash.replace(/^#\/?/, "");
@@ -105,6 +108,7 @@ function render(): void {
   }
   const route = currentRoute();
   syncNative(store.runs); // drive Dock badge + native notifications when wrapped
+  const chatScroll = captureChatScroll(route);
   // render() is a full innerHTML swap fired on every store emit (SSE pushes,
   // 1.2s job poll). That destroys any focused text field mid-typing — the Launch
   // task box and the Save-to-Workspace name input. Capture focus + caret on our
@@ -118,6 +122,7 @@ function render(): void {
     statusbar() +
     `</div>`;
   restoreFocus(focus);
+  restoreChatScroll(chatScroll, route);
 }
 
 function hasStreamingChatAssistant(): boolean {
@@ -133,6 +138,84 @@ function refreshChatComposer(): void {
   btn.classList.toggle("disabled", !canSend);
   if (canSend) btn.removeAttribute("aria-disabled");
   else btn.setAttribute("aria-disabled", "true");
+}
+
+type ChatScrollSnapshot = { sessionId: string; scrollTop: number; nearBottom: boolean };
+
+const chatScrollBySession = new Map<string, ChatScrollSnapshot>();
+
+function renderedChatSessionId(route: Route): string | null {
+  if (route.view !== "chat") return null;
+  return store.chat?.id ?? activeChatId ?? route.param ?? null;
+}
+
+function messageListChatId(el: HTMLElement, route: Route): string | null {
+  return el.dataset.chatId ?? renderedChatSessionId(route);
+}
+
+function snapshotChatScroll(sessionId: string, el: HTMLElement): ChatScrollSnapshot {
+  const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+  return {
+    sessionId,
+    scrollTop: el.scrollTop,
+    nearBottom: distanceFromBottom <= CHAT_STICKY_BOTTOM_PX,
+  };
+}
+
+function rememberChatScroll(snap: ChatScrollSnapshot): void {
+  chatScrollBySession.set(snap.sessionId, snap);
+}
+
+function captureChatScroll(route: Route): ChatScrollSnapshot | null {
+  const el = root.querySelector<HTMLElement>(".chat-messages");
+  const sessionId = el ? messageListChatId(el, route) : null;
+  if (!sessionId || !el) return null;
+  const snap = snapshotChatScroll(sessionId, el);
+  rememberChatScroll(snap);
+  return snap;
+}
+
+function applyChatScroll(sessionId: string, mode: "bottom" | "position", scrollTop = 0): void {
+  const route = currentRoute();
+  if (route.view !== "chat") return;
+  const el = root.querySelector<HTMLElement>(".chat-messages");
+  if (!el) return;
+  if (messageListChatId(el, route) !== sessionId) return;
+  const maxScrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
+  el.scrollTop = mode === "bottom" ? el.scrollHeight : Math.min(scrollTop, maxScrollTop);
+  rememberChatScroll(snapshotChatScroll(sessionId, el));
+}
+
+function restoreChatPosition(sessionId: string, snap: ChatScrollSnapshot): void {
+  if (snap.nearBottom) applyChatScroll(sessionId, "bottom");
+  else applyChatScroll(sessionId, "position", snap.scrollTop);
+
+  // Full DOM swaps happen before the browser has always finished settling grid /
+  // flex scroll metrics. A one-frame confirmation keeps the restored position
+  // from being lost when the chat thread is rebuilt during polling or streaming.
+  window.requestAnimationFrame(() => {
+    if (snap.nearBottom) applyChatScroll(sessionId, "bottom");
+    else applyChatScroll(sessionId, "position", snap.scrollTop);
+  });
+}
+
+function restoreChatScroll(snap: ChatScrollSnapshot | null, route: Route): void {
+  const el = root.querySelector<HTMLElement>(".chat-messages");
+  const sessionId = el ? messageListChatId(el, route) : renderedChatSessionId(route);
+  if (!sessionId || !el) {
+    if (route.view !== "chat") chatScrollToBottomOnNextRender = false;
+    return;
+  }
+  if (chatScrollToBottomOnNextRender) {
+    chatScrollToBottomOnNextRender = false;
+    const next = snapshotChatScroll(sessionId, el);
+    rememberChatScroll({ ...next, nearBottom: true });
+    restoreChatPosition(sessionId, { ...next, nearBottom: true });
+    return;
+  }
+  const saved = snap?.sessionId === sessionId ? snap : chatScrollBySession.get(sessionId);
+  if (!saved) return;
+  restoreChatPosition(sessionId, saved);
 }
 
 const FOCUSABLE_IDS = new Set(["lf-task", "lf-source", "lf-adapter", "save-name", "save-scope", "chat-input"]);
@@ -291,11 +374,25 @@ async function sendChat(): Promise<void> {
   if (updated) {
     activeChatId = updated.id;
     chatDraft = "";
+    chatScrollToBottomOnNextRender = true;
     render();
   }
 }
 
 // --- click delegation (read-only affordances only) ---
+root.addEventListener(
+  "scroll",
+  (ev) => {
+    const target = ev.target;
+    if (!(target instanceof HTMLElement) || !target.classList.contains("chat-messages")) return;
+    const route = currentRoute();
+    const sessionId = messageListChatId(target, route);
+    if (!sessionId) return;
+    rememberChatScroll(snapshotChatScroll(sessionId, target));
+  },
+  true,
+);
+
 root.addEventListener("click", (ev) => {
   const t = ev.target as HTMLElement;
   const nav = t.closest<HTMLElement>("[data-nav]");

@@ -226,7 +226,7 @@ export function renderChat(
       `<div class="chat-head-actions"><div class="chat-head-tags"><span>${t("Codex host")}</span><span>${t("ODW bridge")}</span><span>${t("live data")}</span></div>` +
       `<button class="btn ghost danger sm" data-chat-delete="${esc(session.id)}">${t("Delete")}</button></div>` +
       `</header>` +
-      `<div class="chat-messages">${session.messages.map(messageHtml).join("")}</div>` +
+      `<div class="chat-messages" data-chat-id="${esc(session.id)}">${session.messages.map(messageHtml).join("")}</div>` +
       `<footer class="chat-composer">` +
       errorBanner(status.error) +
       `<textarea id="chat-input" rows="3" placeholder="${esc(t("Ask Codex. Mention ODW or workflow to attach a local run."))}"${composerLocked ? " disabled" : ""}>${esc(draft)}</textarea>` +
