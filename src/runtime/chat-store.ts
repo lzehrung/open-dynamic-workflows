@@ -80,6 +80,14 @@ function titleFrom(text: string): string {
   return clean.length > 54 ? `${clean.slice(0, 51)}...` : clean;
 }
 
+function summaryText(messages: ChatMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const text = messages[i]!.text.trim();
+    if (text) return text;
+  }
+  return "";
+}
+
 function validMessage(value: unknown): value is ChatMessage {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const m = value as Record<string, unknown>;
@@ -126,7 +134,7 @@ export class ChatStore {
       source: s.source,
       state: s.state,
       updatedAt: s.updatedAt,
-      lastMessage: s.messages[s.messages.length - 1]?.text ?? "",
+      lastMessage: summaryText(s.messages),
       linkedRuns: s.linkedRuns.length,
     }));
   }

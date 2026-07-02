@@ -552,3 +552,48 @@ test("HTTP: Chat Host ignores negated workflow mentions and deletes sessions", a
     rmSync(proj, { recursive: true, force: true });
   }
 });
+
+test("HTTP: Chat Host sidebar summary ignores empty streaming placeholders", async () => {
+  const root = tempRoot();
+  const proj = tempRoot();
+  const store = new RunStore(root);
+  let release!: () => void;
+  const handle = await startServer({
+    store,
+    port: 0,
+    host: "127.0.0.1",
+    cwd: proj,
+    claudeProjectsRoot: join(root, "no-claude"),
+    chatRunner: () => new Promise<void>((resolve) => {
+      release = resolve;
+    }),
+  });
+  try {
+    const created = await fetch(`${handle.url}/api/chat/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    }).then((r) => r.json());
+    const text = "调研下证券ETF看看";
+    await fetch(`${handle.url}/api/chat/sessions/${created.id}/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+
+    const list = await fetch(`${handle.url}/api/chat/sessions`).then((r) => r.json());
+    assert.equal(list[0].state, "running");
+    assert.equal(list[0].lastMessage, text);
+
+    release();
+    await waitForChat(
+      `${handle.url}/api/chat/sessions/${created.id}`,
+      (session) =>
+        session.messages.some((m: { role: string; status?: string }) => m.role === "assistant" && m.status === "done"),
+    );
+  } finally {
+    await handle.close();
+    rmSync(root, { recursive: true, force: true });
+    rmSync(proj, { recursive: true, force: true });
+  }
+});
