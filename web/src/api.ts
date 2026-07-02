@@ -20,8 +20,9 @@ import type {
 
 async function getJSON<T>(url: string): Promise<T> {
   const r = await fetch(url, { headers: { accept: "application/json" } });
-  if (!r.ok) throw new Error(`${url} → ${r.status}`);
-  return (await r.json()) as T;
+  const payload = (await r.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!r.ok) throw new Error(String(payload.error ?? `${url} → ${r.status}`));
+  return payload as T;
 }
 
 /** POST JSON; throws with the server's error message so forms can show it. */
@@ -30,6 +31,17 @@ async function postJSON<T>(url: string, body: unknown): Promise<T> {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json" },
     body: JSON.stringify(body),
+  });
+  const payload = (await r.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!r.ok) throw new Error(String(payload.error ?? `${url} → ${r.status}`));
+  return payload as T;
+}
+
+async function deleteJSON<T>(url: string): Promise<T> {
+  const r = await fetch(url, {
+    method: "DELETE",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: "{}",
   });
   const payload = (await r.json().catch(() => ({}))) as Record<string, unknown>;
   if (!r.ok) throw new Error(String(payload.error ?? `${url} → ${r.status}`));
@@ -57,6 +69,7 @@ export const api = {
   createChatSession: (body: { source?: string } = {}) => postJSON<ChatSession>("/api/chat/sessions", body),
   sendChatMessage: (id: string, body: { text: string; adapter?: string; source?: string }) =>
     postJSON<ChatSession>(`/api/chat/sessions/${enc(id)}/messages`, body),
+  deleteChatSession: (id: string) => deleteJSON<{ ok: true }>(`/api/chat/sessions/${enc(id)}`),
   generate: (body: { task: string; adapter?: string; source?: string }) =>
     postJSON<{ runId: string }>("/api/generate", body),
   launchRun: (body: { script?: string; name?: string; args?: unknown; adapter?: string; source?: string }) =>

@@ -34,6 +34,10 @@ class Store {
   settings: SettingsSnapshot | null = null;
   chatSessions: ChatSessionSummary[] | null = null;
   chat: ChatSession | null = null;
+  chatMissingId: string | null = null;
+  chatError = "";
+  chatSending = false;
+  chatCreating = false;
   // Default writable = true (the loopback common case) until the probe answers,
   // so local use never flashes a read-only UI on first paint.
   capabilities: Capabilities = { writable: true };
@@ -141,8 +145,9 @@ class Store {
     try {
       this.chatSessions = await api.chatSessions();
       this.emit();
-    } catch {
+    } catch (err) {
       this.chatSessions = this.chatSessions ?? [];
+      this.chatError = (err as Error).message;
       this.emit();
     }
   }
@@ -150,32 +155,67 @@ class Store {
   async loadChatSession(id: string): Promise<void> {
     try {
       this.chat = await api.chatSession(id);
+      this.chatMissingId = null;
+      this.chatError = "";
       this.emit();
-    } catch {
+    } catch (err) {
       this.chat = null;
+      this.chatMissingId = id;
+      this.chatError = (err as Error).message;
       this.emit();
     }
   }
 
   async createChatSession(source?: string): Promise<ChatSession | null> {
+    this.chatCreating = true;
+    this.chatError = "";
+    this.emit();
     try {
       this.chat = await api.createChatSession(source ? { source } : {});
+      this.chatMissingId = null;
       await this.loadChatSessions();
       return this.chat;
-    } catch {
+    } catch (err) {
+      this.chatError = (err as Error).message;
       this.emit();
       return null;
+    } finally {
+      this.chatCreating = false;
+      this.emit();
     }
   }
 
   async sendChatMessage(id: string, text: string): Promise<ChatSession | null> {
+    this.chatSending = true;
+    this.chatError = "";
+    this.emit();
     try {
       this.chat = await api.sendChatMessage(id, { text });
+      this.chatMissingId = null;
       await this.loadChatSessions();
       return this.chat;
-    } catch {
+    } catch (err) {
+      this.chatError = (err as Error).message;
       this.emit();
       return null;
+    } finally {
+      this.chatSending = false;
+      this.emit();
+    }
+  }
+
+  async deleteChatSession(id: string): Promise<boolean> {
+    this.chatError = "";
+    try {
+      await api.deleteChatSession(id);
+      if (this.chat?.id === id) this.chat = null;
+      if (this.chatMissingId === id) this.chatMissingId = null;
+      await this.loadChatSessions();
+      return true;
+    } catch (err) {
+      this.chatError = (err as Error).message;
+      this.emit();
+      return false;
     }
   }
 

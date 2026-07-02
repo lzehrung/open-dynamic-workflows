@@ -399,6 +399,11 @@ async function handle(req: IncomingMessage, res: ServerResponse, ctx: HandleCont
         sendJson(res, 200, hydrateChatSession(session, sources));
         return;
       }
+      if (method === "DELETE" && !sub) {
+        if (!writeGuard(req, res, boundHost)) return;
+        await deleteChatSession(req, res, chat, sessionId);
+        return;
+      }
       if (method === "POST" && sub === "/messages") {
         if (!writeGuard(req, res, boundHost)) return;
         await postChatMessage(req, res, chat, sources, store, config, configPath, sessionId);
@@ -531,8 +536,17 @@ function settingsView(
   };
 }
 
+const ODW_INTENT_RE = /\bodw\b|workflow|agent|fan[- ]?out|并行|工作流|智能体/i;
+const NEGATED_ODW_RE = [
+  /(?:不|别|不要|无需|不用|禁止).{0,12}(?:触发|启动|运行|创建|发起|调用)?\s*(?:odw|workflow|agent|fan[- ]?out|工作流|智能体)/i,
+  /(?:不触发|不要触发|无需触发|不用触发|别触发)\s*(?:odw|workflow|agent|fan[- ]?out|工作流|智能体)/i,
+  /(?:do not|don't|dont|without|avoid|skip|no need to|no)\s+(?:trigger|start|run|create|launch|call)?\s*(?:odw|workflow|agent|fan[- ]?out)/i,
+  /(?:odw|workflow|agent|fan[- ]?out|工作流|智能体).{0,16}(?:不触发|不要|不用|无需|别|without|do not|don't|dont|avoid|skip)/i,
+];
+
 function wantsOdw(text: string): boolean {
-  return /\bodw\b|workflow|agent|fan[- ]?out|并行|工作流|智能体/i.test(text);
+  if (!ODW_INTENT_RE.test(text)) return false;
+  return !NEGATED_ODW_RE.some((re) => re.test(text));
 }
 
 function chatStateFrom(states: RunDisplayState[], fallback: ChatSessionState): ChatSessionState {
@@ -546,6 +560,12 @@ function toolStatus(state: RunDisplayState | undefined): ChatToolCall["status"] 
   if (state === "stale") return "stale";
   if (state === "done") return "done";
   return "running";
+}
+
+function displayProgress(state: RunDisplayState | undefined, progress: number | undefined): number {
+  const p = typeof progress === "number" && Number.isFinite(progress) ? Math.min(Math.max(progress, 0), 1) : 0;
+  if (state === "done" || state === "failed" || state === "stopped") return Math.max(p, 1);
+  return p;
 }
 
 function eventLabel(ev: Record<string, unknown>): string {
@@ -583,7 +603,7 @@ function hydrateTool(tool: ChatToolCall, sources: RunSource[]): ChatToolCall {
     ...tool,
     status: toolStatus(detail.state),
     workflow: detail.workflowName ?? detail.name ?? tool.workflow,
-    progress: detail.progress,
+    progress: displayProgress(detail.state, detail.progress),
     phase: lastPhase,
     events: events.slice(-8).map((ev) => ({
       type: ev.type,
@@ -602,7 +622,7 @@ function hydrateChatSession(session: ChatSessionRecord, sources: RunSource[]): R
       runId: link.runId,
       workflow: detail?.workflowName ?? detail?.name ?? link.workflow,
       state: detail?.state ?? "stale",
-      progress: detail?.progress ?? 0,
+      progress: displayProgress(detail?.state, detail?.progress),
     };
   });
   const messages = session.messages.map((message): ChatMessage => {
@@ -650,6 +670,24 @@ async function postChatSession(
   sendJson(res, 200, hydrateChatSession(session, sources));
 }
 
+async function deleteChatSession(
+  req: IncomingMessage,
+  res: ServerResponse,
+  chat: ChatStore,
+  sessionId: string,
+): Promise<void> {
+  const body = await readJsonBody(req);
+  if (!body) {
+    sendJson(res, 400, { error: "body must be a JSON object" });
+    return;
+  }
+  if (!chat.delete(sessionId)) {
+    sendJson(res, 404, { error: `no such chat session: ${sessionId}` });
+    return;
+  }
+  sendJson(res, 200, { ok: true });
+}
+
 async function postChatMessage(
   req: IncomingMessage,
   res: ServerResponse,
@@ -695,11 +733,13 @@ async function postChatMessage(
     chat.appendAssistantMessage(
       sessionId,
       "I linked this turn to a local ODW run. The tool card will update from the run stream as it settles.",
+      "chat.linked",
     );
   } else {
     chat.appendAssistantMessage(
       sessionId,
       "I recorded this turn in the local Chat Host. Mention ODW or workflow when you want this conversation to attach a run.",
+      "chat.recorded",
     );
   }
   const updated = chat.get(sessionId);

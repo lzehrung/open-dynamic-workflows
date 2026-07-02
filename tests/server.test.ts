@@ -449,13 +449,60 @@ test("HTTP: Chat Host sessions persist messages and link a real ODW run", async 
     const hydrated = await fetch(`${handle.url}/api/chat/sessions/${created.id}`).then((r) => r.json());
     assert.equal(hydrated.state, "done");
     assert.equal(hydrated.linkedRuns[0].state, "done");
+    assert.equal(hydrated.linkedRuns[0].progress, 1);
     const tool = hydrated.messages.find((m: { role: string }) => m.role === "tool");
     assert.equal(tool.tool.status, "done");
+    assert.equal(tool.tool.progress, 1);
     assert.match(tool.tool.result, /local Chat Host/);
 
     const list = await fetch(`${handle.url}/api/chat/sessions`).then((r) => r.json());
     assert.equal(list.length, 1);
     assert.equal(list[0].linkedRuns, 1);
+  } finally {
+    await handle.close();
+    rmSync(root, { recursive: true, force: true });
+    rmSync(proj, { recursive: true, force: true });
+  }
+});
+
+test("HTTP: Chat Host ignores negated workflow mentions and deletes sessions", async () => {
+  const root = tempRoot();
+  const proj = tempRoot();
+  const store = new RunStore(root);
+  const handle = await startServer({
+    store,
+    port: 0,
+    host: "127.0.0.1",
+    cwd: proj,
+    claudeProjectsRoot: join(root, "no-claude"),
+  });
+  try {
+    const created = await fetch(`${handle.url}/api/chat/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    }).then((r) => r.json());
+
+    const updated = await fetch(`${handle.url}/api/chat/sessions/${created.id}/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "普通消息：hello chat host，不触发 workflow" }),
+    }).then((r) => r.json());
+    assert.equal(updated.linkedRuns.length, 0);
+    assert.equal(updated.messages.some((m: { role: string }) => m.role === "tool"), false);
+    assert.equal(store.listRuns().length, 0);
+
+    const deleted = await fetch(`${handle.url}/api/chat/sessions/${created.id}`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    assert.equal(deleted.status, 200);
+
+    const missing = await fetch(`${handle.url}/api/chat/sessions/${created.id}`);
+    assert.equal(missing.status, 404);
+    const list = await fetch(`${handle.url}/api/chat/sessions`).then((r) => r.json());
+    assert.equal(list.length, 0);
   } finally {
     await handle.close();
     rmSync(root, { recursive: true, force: true });

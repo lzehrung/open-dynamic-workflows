@@ -123,6 +123,7 @@ export interface Capabilities {
 export type ChatRole = "user" | "assistant" | "tool";
 export type ChatSessionState = "running" | "idle" | "done";
 export type ChatToolStatus = "running" | "done" | "failed" | "stale";
+export type ChatMessageKind = "chat.ready" | "chat.linked" | "chat.recorded";
 
 export interface ChatToolEvent {
   type: string;
@@ -146,6 +147,7 @@ export interface ChatMessage {
   role: ChatRole;
   text: string;
   ts: number;
+  kind?: ChatMessageKind;
   tool?: ChatToolCall;
 }
 

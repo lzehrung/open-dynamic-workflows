@@ -40,7 +40,8 @@ function stageHead(run: RunDetail, tab: JobTab): string {
 
   const terminal = TERMINAL.has(run.state);
   const progClass = run.state === "failed" ? "failed" : run.state === "stopped" ? "stopped" : "";
-  const pct = Math.round(run.progress * 100);
+  const displayProgress = terminal ? Math.max(run.progress, 1) : run.progress;
+  const pct = Math.round(displayProgress * 100);
   const beat = run.state === "running" ? `<span class="heartbeat"></span>` : "";
 
   const subtabs =
@@ -131,10 +132,12 @@ function graphTab(run: RunDetail, selectedAi: number | null): string {
     const planned = (run.phaseOrder.length ? run.phaseOrder : run.phases.map((p) => p.title))
       .map((p, i) => `<span class="ppill"><span class="ix">${i + 1}</span>${esc(p)}</span>`)
       .join(`<span class="ar" style="color:var(--faint)"> → </span>`);
+    const terminal = TERMINAL.has(run.state);
     return (
       `<div class="dagarea"><div class="empty">` +
-      `<div class="gh">${t("Waiting for the first agent…")}</div>` +
-      `<div>${t("Declared phases:")}</div><div class="phasepills">${planned || "—"}</div>` +
+      `<div class="gh">${terminal ? t("No agent calls in this run") : t("Waiting for the first agent…")}</div>` +
+      `<div>${terminal ? t("This run only recorded phases and a result.") : t("Declared phases:")}</div>` +
+      `<div class="phasepills">${planned || "—"}</div>` +
       `</div>${ticker(run)}</div>`
     );
   }

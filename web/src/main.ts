@@ -74,7 +74,13 @@ function currentRoute(): Route {
 function viewHtml(route: Route): string {
   switch (route.view) {
     case "chat":
-      return renderChat(store.chatSessions, store.chat, chatDraft, activeChatId);
+      return renderChat(store.chatSessions, store.chat, chatDraft, activeChatId, {
+        creating: store.chatCreating,
+        sending: store.chatSending,
+        error: store.chatError,
+        missingId: store.chatMissingId,
+        writable: store.capabilities.writable,
+      });
     case "activity":
       return renderActivity();
     case "workspace":
@@ -146,18 +152,27 @@ async function enterRoute(): Promise<void> {
     poll = window.setInterval(() => store.loadActivity(), 1500);
   } else if (route.view === "chat") {
     if (store.chatSessions === null) await store.loadChatSessions();
+    const ids = new Set((store.chatSessions ?? []).map((s) => s.id));
     const first = store.chatSessions?.[0]?.id ?? null;
-    const want = route.param ?? activeChatId ?? first;
+    const remembered = activeChatId && ids.has(activeChatId) ? activeChatId : null;
+    const want = route.param ?? remembered ?? first;
     activeChatId = want;
     if (want) {
       await store.loadChatSession(want);
+      if (store.chatMissingId === want) {
+        render();
+        return;
+      }
       poll = window.setInterval(async () => {
         const r = currentRoute();
-        if (r.view !== "chat" || activeChatId !== want) return;
+        const current = r.param ?? activeChatId;
+        if (r.view !== "chat" || current !== want) return;
         await store.loadChatSession(want);
       }, 1500);
     } else {
       store.chat = null;
+      store.chatMissingId = null;
+      store.chatError = "";
       render();
     }
   } else if (route.view === "workspace") {
@@ -227,14 +242,36 @@ function go(hash: string): void {
   location.hash = hash;
 }
 
+function goOrReload(hash: string): void {
+  if (location.hash === hash) void enterRoute();
+  else go(hash);
+}
+
+function chatRoute(id: string | null): string {
+  return id ? `#/chat/${encodeURIComponent(id)}` : "#/chat";
+}
+
 async function sendChat(): Promise<void> {
   const text = chatDraft.trim();
   const id = activeChatId;
-  if (!id || !text) return;
-  chatDraft = "";
-  render();
+  if (!id || store.chatMissingId) {
+    store.chatError = "Create a session first.";
+    store.emit();
+    return;
+  }
+  if (!text) {
+    chatDraft = "";
+    store.chatError = "Message text is required.";
+    store.emit();
+    return;
+  }
+  if (store.chatSending) return;
   const updated = await store.sendChatMessage(id, text);
-  if (updated) activeChatId = updated.id;
+  if (updated) {
+    activeChatId = updated.id;
+    chatDraft = "";
+    render();
+  }
 }
 
 // --- click delegation (read-only affordances only) ---
@@ -259,18 +296,32 @@ root.addEventListener("click", (ev) => {
   if (chatSession) {
     const id = chatSession.dataset.chatSession!;
     activeChatId = id;
-    history.replaceState(null, "", `#/chat/${encodeURIComponent(id)}`);
-    void store.loadChatSession(id);
+    chatDraft = "";
+    store.chatError = "";
+    goOrReload(chatRoute(id));
     return;
   }
-  if (t.closest("[data-chat-new]")) {
+  if (t.closest("[data-chat-new]") && !store.chatCreating) {
     void (async () => {
       const created = await store.createChatSession();
       if (!created) return;
       activeChatId = created.id;
       chatDraft = "";
-      history.replaceState(null, "", `#/chat/${encodeURIComponent(created.id)}`);
-      render();
+      goOrReload(chatRoute(created.id));
+    })();
+    return;
+  }
+  const deleteChat = t.closest<HTMLElement>("[data-chat-delete]");
+  if (deleteChat && !store.chatCreating && !store.chatSending) {
+    const id = deleteChat.dataset.chatDelete!;
+    if (!window.confirm(tr("Delete this chat session?"))) return;
+    void (async () => {
+      const ok = await store.deleteChatSession(id);
+      if (!ok) return;
+      const next = store.chatSessions?.[0]?.id ?? null;
+      activeChatId = next;
+      chatDraft = "";
+      goOrReload(chatRoute(next));
     })();
     return;
   }
@@ -421,14 +472,20 @@ root.addEventListener("input", (ev) => {
   } else if (el.id === "lf-source") launchForm.source = el.value;
   else if (el.id === "save-name") saveForm.name = el.value;
   else if (el.id === "save-scope") saveForm.scope = el.value === "project" ? "project" : "global";
-  else if (el.id === "chat-input") chatDraft = el.value;
+  else if (el.id === "chat-input") {
+    chatDraft = el.value;
+    if (store.chatError === "Message text is required." && el.value.trim()) {
+      store.chatError = "";
+      store.emit();
+    }
+  }
 });
 
 root.addEventListener("keydown", (ev) => {
   const el = ev.target as HTMLTextAreaElement | null;
   if (el?.id === "chat-input" && ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
     ev.preventDefault();
-    if (chatDraft.trim()) void sendChat();
+    void sendChat();
   }
 });
 

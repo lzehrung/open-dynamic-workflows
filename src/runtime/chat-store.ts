@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 export type ChatRole = "user" | "assistant" | "tool";
 export type ChatSessionState = "running" | "idle" | "done";
 export type ChatToolStatus = "running" | "done" | "failed" | "stale";
+export type ChatMessageKind = "chat.ready" | "chat.linked" | "chat.recorded";
 
 export interface ChatToolEvent {
   type: string;
@@ -27,6 +28,7 @@ export interface ChatMessage {
   role: ChatRole;
   text: string;
   ts: number;
+  kind?: ChatMessageKind;
   tool?: ChatToolCall;
 }
 
@@ -83,7 +85,8 @@ function validMessage(value: unknown): value is ChatMessage {
     typeof m.id === "string" &&
     (m.role === "user" || m.role === "assistant" || m.role === "tool") &&
     typeof m.text === "string" &&
-    typeof m.ts === "number"
+    typeof m.ts === "number" &&
+    (m.kind === undefined || m.kind === "chat.ready" || m.kind === "chat.linked" || m.kind === "chat.recorded")
   );
 }
 
@@ -139,6 +142,7 @@ export class ChatStore {
           id: newId("msg"),
           role: "assistant",
           ts,
+          kind: "chat.ready",
           text: "This local Chat Host session is ready. Mention ODW or workflow to attach a real ODW run to the turn.",
         },
       ],
@@ -161,12 +165,12 @@ export class ChatStore {
     return session;
   }
 
-  appendAssistantMessage(id: string, text: string): ChatSessionRecord {
+  appendAssistantMessage(id: string, text: string, kind?: ChatMessageKind): ChatSessionRecord {
     const data = this.read();
     const session = data.sessions.find((s) => s.id === id);
     if (!session) throw new Error(`no such chat session: ${id}`);
     const ts = now();
-    session.messages.push({ id: newId("msg"), role: "assistant", text, ts });
+    session.messages.push({ id: newId("msg"), role: "assistant", text, ts, ...(kind ? { kind } : {}) });
     session.updatedAt = ts;
     this.write(data);
     return session;
@@ -197,6 +201,15 @@ export class ChatStore {
     session.updatedAt = ts;
     this.write(data);
     return session;
+  }
+
+  delete(id: string): boolean {
+    const data = this.read();
+    const next = data.sessions.filter((s) => s.id !== id);
+    if (next.length === data.sessions.length) return false;
+    data.sessions = next;
+    this.write(data);
+    return true;
   }
 
   private read(): ChatFile {
