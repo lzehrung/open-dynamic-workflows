@@ -476,8 +476,8 @@ root.addEventListener("input", (ev) => {
     chatDraft = el.value;
     if (store.chatError === "Message text is required." && el.value.trim()) {
       store.chatError = "";
-      store.emit();
     }
+    render();
   }
 });
 
