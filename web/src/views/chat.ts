@@ -55,7 +55,8 @@ function stateBadge(state: ChatSessionState | ChatToolStatus): string {
 }
 
 function messageText(m: ChatMessage): string {
-  const kind = m.kind ?? LEGACY_MESSAGE_KIND.get(m.text);
+  const rawKind = m.kind ?? LEGACY_MESSAGE_KIND.get(m.text);
+  const kind = rawKind && rawKind in SYSTEM_MESSAGES ? (rawKind as keyof typeof SYSTEM_MESSAGES) : undefined;
   return kind ? t(SYSTEM_MESSAGES[kind]) : m.text;
 }
 
@@ -89,11 +90,14 @@ function messageHtml(m: ChatMessage): string {
   if (m.role === "tool" && m.tool) return toolCard(m);
   const who = m.role === "user" ? t("You") : "Codex";
   const text = messageText(m);
+  const streaming = m.status === "streaming";
+  const failed = m.status === "failed";
+  const state = streaming ? " streaming" : failed ? " failed" : "";
   return (
-    `<div class="chat-msg ${m.role}">` +
+    `<div class="chat-msg ${m.role}${state}">` +
     `<div class="chat-avatar">${m.role === "user" ? "U" : "C"}</div>` +
     `<div class="chat-bubble"><div class="chat-msg-head"><b>${who}</b><span>${fmtClock(m.ts)}</span></div>` +
-    `<div class="chat-text">${esc(text)}</div></div>` +
+    `<div class="chat-text">${esc(text)}${streaming ? `<span class="chat-caret"></span>` : ""}</div></div>` +
     `</div>`
   );
 }
@@ -208,7 +212,9 @@ export function renderChat(
       : list.length
         ? list.map((s) => sessionRow(s, activeId)).join("")
         : `<div class="chat-empty-side">${t("No chat sessions yet.")}</div>`;
-  const canSend = Boolean(session && draft.trim() && !status.sending && status.writable);
+  const codexStreaming = Boolean(session?.messages.some((m) => m.role === "assistant" && m.status === "streaming"));
+  const composerLocked = status.sending || codexStreaming || !status.writable;
+  const canSend = Boolean(session && draft.trim() && !composerLocked);
   const sendAttrs = canSend ? "" : ` disabled aria-disabled="true"`;
   const sendClass = canSend ? "" : " disabled";
   const thread = status.missingId
@@ -223,7 +229,7 @@ export function renderChat(
       `<div class="chat-messages">${session.messages.map(messageHtml).join("")}</div>` +
       `<footer class="chat-composer">` +
       errorBanner(status.error) +
-      `<textarea id="chat-input" rows="3" placeholder="${esc(t("Ask Codex. Mention ODW or workflow to attach a local run."))}"${status.sending || !status.writable ? " disabled" : ""}>${esc(draft)}</textarea>` +
+      `<textarea id="chat-input" rows="3" placeholder="${esc(t("Ask Codex. Mention ODW or workflow to attach a local run."))}"${composerLocked ? " disabled" : ""}>${esc(draft)}</textarea>` +
       `<div class="chat-compose-actions"><span>${t("Messages are stored by the local backend.")}</span>` +
       `<button class="btn primary${sendClass}" data-chat-send="1"${sendAttrs}>${status.sending ? t("Sending...") : t("Send")}</button></div>` +
       `</footer>` +

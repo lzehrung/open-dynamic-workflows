@@ -122,8 +122,9 @@ export interface Capabilities {
 
 export type ChatRole = "user" | "assistant" | "tool";
 export type ChatSessionState = "running" | "idle" | "done";
+export type ChatMessageStatus = "streaming" | "done" | "failed";
 export type ChatToolStatus = "running" | "done" | "failed" | "stale";
-export type ChatMessageKind = "chat.ready" | "chat.linked" | "chat.recorded";
+export type ChatMessageKind = "chat.ready" | "chat.linked" | "chat.recorded" | "chat.odw_result";
 
 export interface ChatToolEvent {
   type: string;
@@ -148,6 +149,7 @@ export interface ChatMessage {
   text: string;
   ts: number;
   kind?: ChatMessageKind;
+  status?: ChatMessageStatus;
   tool?: ChatToolCall;
 }
 

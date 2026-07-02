@@ -42,6 +42,7 @@
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, watch, writeFileSync, type FSWatcher } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -89,6 +90,8 @@ export interface ServeOptions {
   claudeProjectsRoot?: string | null;
   /** Which Claude runs to surface: "all" projects (default) or just the served repo + worktrees. */
   claudeJobsScope?: "all" | "project";
+  /** Test seam for Chat Host's Codex-backed assistant stream. Defaults to `codex exec`. */
+  chatRunner?: ChatTurnRunner;
 }
 
 export interface ServeHandle {
@@ -97,6 +100,14 @@ export interface ServeHandle {
   host: string;
   close(): Promise<void>;
 }
+
+export interface ChatTurnRequest {
+  session: ChatSessionRecord;
+  prompt: string;
+  cwd: string;
+}
+
+export type ChatTurnRunner = (req: ChatTurnRequest, onChunk: (chunk: string) => void) => Promise<void>;
 
 const DEFAULT_PORT = 4317;
 const DEFAULT_HOST = "127.0.0.1";
@@ -122,6 +133,8 @@ return {
   sessionId: args.sessionId,
 }
 `;
+
+const TERMINAL_RUN_STATES = new Set<RunDisplayState>(["done", "failed", "stopped"]);
 
 const LOOPBACK_BINDS = new Set(["127.0.0.1", "localhost", "::1"]);
 const LOOPBACK_HOST_NAMES = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
@@ -246,9 +259,10 @@ export function startServer(options: ServeOptions): Promise<ServeHandle> {
   ];
   const chat = new ChatStore(store.root, cwd);
   const clients = new Set<ServerResponse>();
+  const chatRuntime = createChatRuntime(options.chatRunner, (sessionId) => broadcastChat(clients, sessionId));
 
   const server = createServer((req, res) => {
-    handle(req, res, { sources, store, chat, clients, cwd, config, configPath, boundHost: host }).catch((err) => {
+    handle(req, res, { sources, store, chat, chatRuntime, clients, cwd, config, configPath, boundHost: host }).catch((err) => {
       try {
         sendJson(res, 500, { error: (err as Error).message ?? "internal error" });
       } catch {
@@ -263,6 +277,7 @@ export function startServer(options: ServeOptions): Promise<ServeHandle> {
   let watcher: FSWatcher | null = null;
   let lastSig = "";
   const broadcast = (force = false) => {
+    syncCompletedChatRuns(chat, sources, chatRuntime);
     if (clients.size === 0) return;
     const runs = allSummaries(sources);
     const sig = JSON.stringify(runs.map((r) => [r.runId, r.state, r.counts, r.progress]));
@@ -318,6 +333,7 @@ interface HandleContext {
   sources: RunSource[];
   store: RunStore;
   chat: ChatStore;
+  chatRuntime: ChatRuntime;
   clients: Set<ServerResponse>;
   cwd: string;
   config: Config;
@@ -327,7 +343,7 @@ interface HandleContext {
 }
 
 async function handle(req: IncomingMessage, res: ServerResponse, ctx: HandleContext): Promise<void> {
-  const { sources, store, chat, clients, cwd, config, configPath, boundHost } = ctx;
+  const { sources, store, chat, chatRuntime, clients, cwd, config, configPath, boundHost } = ctx;
   const method = req.method ?? "GET";
   const url = new URL(req.url ?? "/", "http://localhost");
   const path = url.pathname;
@@ -374,6 +390,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, ctx: HandleCont
       return;
     }
     if (method === "GET" && path === "/api/chat/sessions") {
+      syncCompletedChatRuns(chat, sources, chatRuntime);
       sendJson(
         res,
         200,
@@ -391,6 +408,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, ctx: HandleCont
       const sessionId = decodeURIComponent(chatMatch[1]!);
       const sub = chatMatch[2];
       if (method === "GET" && !sub) {
+        syncCompletedChatRuns(chat, sources, chatRuntime);
         const session = chat.get(sessionId);
         if (!session) {
           sendJson(res, 404, { error: `no such chat session: ${sessionId}` });
@@ -406,7 +424,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, ctx: HandleCont
       }
       if (method === "POST" && sub === "/messages") {
         if (!writeGuard(req, res, boundHost)) return;
-        await postChatMessage(req, res, chat, sources, store, config, configPath, sessionId);
+        await postChatMessage(req, res, chat, chatRuntime, sources, store, config, configPath, sessionId);
         return;
       }
     }
@@ -549,6 +567,178 @@ function wantsOdw(text: string): boolean {
   return !NEGATED_ODW_RE.some((re) => re.test(text));
 }
 
+interface ChatRuntime {
+  runner: ChatTurnRunner;
+  activeSessions: Set<string>;
+  serverStartedAt: number;
+  notify(sessionId: string): void;
+}
+
+function createChatRuntime(runner?: ChatTurnRunner, notify?: (sessionId: string) => void): ChatRuntime {
+  return {
+    runner: runner ?? createDefaultChatRunner(),
+    activeSessions: new Set(),
+    serverStartedAt: Math.floor(Date.now() / 1000),
+    notify: notify ?? (() => {}),
+  };
+}
+
+function createDefaultChatRunner(): ChatTurnRunner {
+  return ({ prompt, cwd }, onChunk) =>
+    new Promise<void>((resolvePromise, reject) => {
+      const child = spawn(
+        "codex",
+        [
+          "exec",
+          "--skip-git-repo-check",
+          "--ephemeral",
+          "--sandbox",
+          "read-only",
+          "--cd",
+          cwd,
+          "--color",
+          "never",
+          "-",
+        ],
+        { cwd, stdio: ["pipe", "pipe", "pipe"] },
+      );
+      let stderr = "";
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+      child.stdout.on("data", (chunk) => onChunk(stripAnsi(String(chunk))));
+      child.stderr.on("data", (chunk) => {
+        stderr += stripAnsi(String(chunk));
+      });
+      child.on("error", reject);
+      child.on("close", (code, signal) => {
+        if (code === 0) {
+          resolvePromise();
+          return;
+        }
+        const tail = stderr.trim().slice(-1600);
+        reject(new Error(`codex exited with ${code ?? signal ?? "unknown"}${tail ? `: ${tail}` : ""}`));
+      });
+      child.stdin.end(prompt);
+    });
+}
+
+function stripAnsi(text: string): string {
+  return text.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
+}
+
+function hasStreamingAssistant(session: ChatSessionRecord): boolean {
+  return session.messages.some((m) => m.role === "assistant" && m.status === "streaming");
+}
+
+function existingDir(path: string): string | null {
+  try {
+    return statSync(path).isDirectory() ? path : null;
+  } catch {
+    return null;
+  }
+}
+
+function chatWorkingDir(session: ChatSessionRecord, fallback: string): string {
+  return existingDir(session.source) ?? existingDir(fallback) ?? scratchSourceDir();
+}
+
+function formatTranscriptMessage(message: ChatMessage): string | null {
+  if (message.kind === "chat.ready") return null;
+  if (message.role === "tool") {
+    const tool = message.tool;
+    if (!tool) return `Tool: ${message.text}`;
+    const result = tool.result ? `\nTool result:\n${tool.result}` : "";
+    return `Tool ${tool.name} (${tool.status}) ${tool.workflow} ${tool.runId}: ${message.text}${result}`;
+  }
+  const who = message.role === "user" ? "User" : "Assistant";
+  if (!message.text.trim() && message.status === "streaming") return null;
+  return `${who}: ${message.text}`;
+}
+
+function buildCodexChatPrompt(session: ChatSessionRecord, assistantMessageId: string): string {
+  const transcript = session.messages
+    .filter((m) => m.id !== assistantMessageId)
+    .map(formatTranscriptMessage)
+    .filter((m): m is string => m !== null)
+    .slice(-24)
+    .join("\n\n");
+  return [
+    "You are Codex replying inside the Open Dynamic Workflows Chat Host UI.",
+    "Answer the latest user message directly and naturally. Prefer the user's language.",
+    "This is a hosted conversation; use the transcript for context.",
+    "When the transcript contains an ODW run completion user message, continue from that result.",
+    "Do not modify files unless the user explicitly asks for code changes in this chat.",
+    "",
+    "Conversation transcript:",
+    transcript || "(empty)",
+    "",
+    "Return only the next assistant message.",
+  ].join("\n");
+}
+
+function startChatCodexTurn(
+  chat: ChatStore,
+  sessionId: string,
+  runtime: ChatRuntime,
+  fallbackCwd: string,
+): ChatSessionRecord | null {
+  const current = chat.get(sessionId);
+  if (!current || hasStreamingAssistant(current) || runtime.activeSessions.has(sessionId)) return current;
+  const withPlaceholder = chat.appendAssistantMessage(sessionId, "", undefined, "streaming");
+  runtime.notify(sessionId);
+  const placeholder = withPlaceholder.messages[withPlaceholder.messages.length - 1]!;
+  const prompt = buildCodexChatPrompt(withPlaceholder, placeholder.id);
+  const cwd = chatWorkingDir(withPlaceholder, fallbackCwd);
+  let text = "";
+  let flushTimer: NodeJS.Timeout | null = null;
+  const flush = () => {
+    flushTimer = null;
+    chat.updateMessage(sessionId, placeholder.id, { text });
+    runtime.notify(sessionId);
+  };
+  const queueFlush = () => {
+    if (flushTimer) return;
+    flushTimer = setTimeout(flush, 80);
+    flushTimer.unref?.();
+  };
+
+  runtime.activeSessions.add(sessionId);
+  void Promise.resolve()
+    .then(() =>
+      runtime.runner({ session: withPlaceholder, prompt, cwd }, (chunk) => {
+        if (!chunk) return;
+        text += chunk;
+        queueFlush();
+      }),
+    )
+    .then(() => {
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      const finalText = text.trimEnd() || "Codex finished without producing text.";
+      chat.updateMessage(sessionId, placeholder.id, { text: finalText, status: "done" });
+      runtime.notify(sessionId);
+    })
+    .catch((err) => {
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      const existing = text.trimEnd();
+      const errorText = `Codex stream failed: ${(err as Error).message ?? String(err)}`;
+      chat.updateMessage(sessionId, placeholder.id, {
+        text: existing ? `${existing}\n\n${errorText}` : errorText,
+        status: "failed",
+      });
+      runtime.notify(sessionId);
+    })
+    .finally(() => {
+      runtime.activeSessions.delete(sessionId);
+    });
+  return chat.get(sessionId);
+}
+
 function chatStateFrom(states: RunDisplayState[], fallback: ChatSessionState): ChatSessionState {
   if (states.some((s) => s === "pending" || s === "running" || s === "paused" || s === "stale")) return "running";
   if (states.length > 0 && states.every((s) => s === "done" || s === "failed" || s === "stopped")) return "done";
@@ -582,6 +772,36 @@ function resultText(value: unknown): string | undefined {
     return JSON.stringify(value, null, 2);
   } catch {
     return String(value);
+  }
+}
+
+function hasRunResultMessage(session: ChatSessionRecord, runId: string): boolean {
+  return session.messages.some((m) => m.kind === "chat.odw_result" && m.text.includes(runId));
+}
+
+function syncCompletedChatRuns(chat: ChatStore, sources: RunSource[], runtime: ChatRuntime): void {
+  for (const session of chat.records()) {
+    if (hasStreamingAssistant(session) || runtime.activeSessions.has(session.id)) continue;
+    for (const link of session.linkedRuns) {
+      if (hasRunResultMessage(session, link.runId)) continue;
+      const src = RUN_ID.test(link.runId) ? sourceForRun(sources, link.runId) : null;
+      const detail = src?.detail(link.runId) ?? null;
+      if (!detail || !TERMINAL_RUN_STATES.has(detail.state)) continue;
+      if ((detail.createdAt ?? 0) < runtime.serverStartedAt) continue;
+      const result = src?.result(link.runId);
+      const value = result?.has ? resultText(result.value) : undefined;
+      const title = detail.workflowName ?? detail.name ?? link.workflow;
+      const text = [
+        `ODW run ${link.runId} (${title}) finished with state "${detail.state}".`,
+        value ? `Result:\n${value}` : "",
+        detail.error ? `Error:\n${resultText(detail.error)}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+      chat.appendUserMessage(session.id, text, "chat.odw_result");
+      startChatCodexTurn(chat, session.id, runtime, session.source);
+      break;
+    }
   }
 }
 
@@ -629,12 +849,15 @@ function hydrateChatSession(session: ChatSessionRecord, sources: RunSource[]): R
     if (!message.tool) return message;
     return { ...message, tool: hydrateTool(message.tool, sources) };
   });
+  const messageStreaming = messages.some((m) => m.role === "assistant" && m.status === "streaming");
   return {
     ...session,
-    state: chatStateFrom(
-      linkedRuns.map((r) => r.state as RunDisplayState),
-      session.state,
-    ),
+    state: messageStreaming
+      ? "running"
+      : chatStateFrom(
+          linkedRuns.map((r) => r.state as RunDisplayState),
+          session.state,
+        ),
     linkedRuns,
     messages,
   };
@@ -692,6 +915,7 @@ async function postChatMessage(
   req: IncomingMessage,
   res: ServerResponse,
   chat: ChatStore,
+  chatRuntime: ChatRuntime,
   sources: RunSource[],
   store: RunStore,
   config: Config,
@@ -713,6 +937,10 @@ async function postChatMessage(
     sendJson(res, 404, { error: `no such chat session: ${sessionId}` });
     return;
   }
+  if (hasStreamingAssistant(existing) || chatRuntime.activeSessions.has(sessionId)) {
+    sendJson(res, 409, { error: "Codex is still responding in this chat session" });
+    return;
+  }
   chat.appendUserMessage(sessionId, text);
   if (wantsOdw(text)) {
     const launchBody = {
@@ -730,17 +958,8 @@ async function postChatMessage(
       origin: "chat",
     });
     chat.appendToolRun(sessionId, runId, CHAT_HOST_WORKFLOW_NAME);
-    chat.appendAssistantMessage(
-      sessionId,
-      "I linked this turn to a local ODW run. The tool card will update from the run stream as it settles.",
-      "chat.linked",
-    );
   } else {
-    chat.appendAssistantMessage(
-      sessionId,
-      "I recorded this turn in the local Chat Host. Mention ODW or workflow when you want this conversation to attach a run.",
-      "chat.recorded",
-    );
+    startChatCodexTurn(chat, sessionId, chatRuntime, existing.source);
   }
   const updated = chat.get(sessionId);
   if (!updated) {
@@ -987,6 +1206,12 @@ function openStream(
   res.on("error", cleanup); // a socket error must not become an uncaught throw
   safeWrite(res, ": connected\n\n", clients);
   safeWrite(res, `event: runs\ndata: ${JSON.stringify(allSummaries(sources))}\n\n`, clients);
+}
+
+function broadcastChat(clients: Set<ServerResponse>, sessionId: string): void {
+  if (clients.size === 0) return;
+  const frame = `event: chat\ndata: ${JSON.stringify({ sessionId })}\n\n`;
+  for (const c of clients) safeWrite(c, frame, clients);
 }
 
 /** Write to an SSE client; on failure drop it from the pool. Never throws. */

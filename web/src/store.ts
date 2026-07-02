@@ -76,6 +76,19 @@ class Store {
         this.backoff = 1000;
         this.emit();
       });
+      es.addEventListener("chat", (e) => {
+        let sessionId: string | null = null;
+        try {
+          const payload = JSON.parse((e as MessageEvent).data) as { sessionId?: unknown };
+          sessionId = typeof payload.sessionId === "string" ? payload.sessionId : null;
+        } catch {
+          sessionId = null;
+        }
+        void this.loadChatSessions();
+        if (sessionId && (this.chat?.id === sessionId || this.chatMissingId === sessionId)) {
+          void this.loadChatSession(sessionId);
+        }
+      });
       es.onerror = () => {
         this.conn = "reconnecting";
         this.emit();

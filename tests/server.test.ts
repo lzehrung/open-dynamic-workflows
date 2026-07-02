@@ -16,9 +16,29 @@ import {
   detail,
   listSummaries,
 } from "../src/runtime/runs-view.js";
-import { startServer } from "../src/runtime/server.js";
+import { startServer, type ChatTurnRunner } from "../src/runtime/server.js";
 
 const tempRoot = () => mkdtempSync(join(tmpdir(), "odw-serve-"));
+
+const mockChatRunner = (prompts: string[] = []): ChatTurnRunner => async ({ prompt }, onChunk) => {
+  prompts.push(prompt);
+  onChunk(prompt.includes("finished with state") ? "mock codex follow-up" : "mock codex reply");
+};
+
+async function waitForChat(
+  url: string,
+  predicate: (session: Record<string, any>) => boolean,
+  timeoutMs = 2500,
+): Promise<Record<string, any>> {
+  const started = Date.now();
+  let last: Record<string, any> | null = null;
+  while (Date.now() - started < timeoutMs) {
+    last = await fetch(url).then((r) => r.json());
+    if (predicate(last)) return last;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`chat did not reach expected state: ${JSON.stringify(last)}`);
+}
 
 /** Write a run directory: meta + status + a JSONL event stream. */
 function seedRun(
@@ -417,12 +437,14 @@ test("HTTP: Chat Host sessions persist messages and link a real ODW run", async 
   const root = tempRoot();
   const proj = tempRoot();
   const store = new RunStore(root);
+  const prompts: string[] = [];
   const handle = await startServer({
     store,
     port: 0,
     host: "127.0.0.1",
     cwd: proj,
     claudeProjectsRoot: join(root, "no-claude"),
+    chatRunner: mockChatRunner(prompts),
   });
   try {
     const created = await fetch(`${handle.url}/api/chat/sessions`, {
@@ -446,7 +468,14 @@ test("HTTP: Chat Host sessions persist messages and link a real ODW run", async 
 
     await waitFor(store, runId, { timeoutMs: 5000 });
 
-    const hydrated = await fetch(`${handle.url}/api/chat/sessions/${created.id}`).then((r) => r.json());
+    const hydrated = await waitForChat(
+      `${handle.url}/api/chat/sessions/${created.id}`,
+      (session) =>
+        session.messages.some((m: { kind?: string }) => m.kind === "chat.odw_result") &&
+        session.messages.some((m: { role: string; text: string; status?: string }) =>
+          m.role === "assistant" && m.text.includes("mock codex follow-up") && m.status === "done",
+        ),
+    );
     assert.equal(hydrated.state, "done");
     assert.equal(hydrated.linkedRuns[0].state, "done");
     assert.equal(hydrated.linkedRuns[0].progress, 1);
@@ -454,6 +483,8 @@ test("HTTP: Chat Host sessions persist messages and link a real ODW run", async 
     assert.equal(tool.tool.status, "done");
     assert.equal(tool.tool.progress, 1);
     assert.match(tool.tool.result, /local Chat Host/);
+    assert.equal(prompts.length, 1);
+    assert.match(prompts[0]!, /ODW run /);
 
     const list = await fetch(`${handle.url}/api/chat/sessions`).then((r) => r.json());
     assert.equal(list.length, 1);
@@ -469,12 +500,14 @@ test("HTTP: Chat Host ignores negated workflow mentions and deletes sessions", a
   const root = tempRoot();
   const proj = tempRoot();
   const store = new RunStore(root);
+  const prompts: string[] = [];
   const handle = await startServer({
     store,
     port: 0,
     host: "127.0.0.1",
     cwd: proj,
     claudeProjectsRoot: join(root, "no-claude"),
+    chatRunner: mockChatRunner(prompts),
   });
   try {
     const created = await fetch(`${handle.url}/api/chat/sessions`, {
@@ -491,6 +524,16 @@ test("HTTP: Chat Host ignores negated workflow mentions and deletes sessions", a
     assert.equal(updated.linkedRuns.length, 0);
     assert.equal(updated.messages.some((m: { role: string }) => m.role === "tool"), false);
     assert.equal(store.listRuns().length, 0);
+    const answered = await waitForChat(
+      `${handle.url}/api/chat/sessions/${created.id}`,
+      (session) =>
+        session.messages.some((m: { role: string; text: string; status?: string }) =>
+          m.role === "assistant" && m.text.includes("mock codex reply") && m.status === "done",
+        ),
+    );
+    assert.equal(answered.linkedRuns.length, 0);
+    assert.equal(prompts.length, 1);
+    assert.match(prompts[0]!, /普通消息/);
 
     const deleted = await fetch(`${handle.url}/api/chat/sessions/${created.id}`, {
       method: "DELETE",

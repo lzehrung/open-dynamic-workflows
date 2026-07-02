@@ -3,8 +3,9 @@ import { dirname, join } from "node:path";
 
 export type ChatRole = "user" | "assistant" | "tool";
 export type ChatSessionState = "running" | "idle" | "done";
+export type ChatMessageStatus = "streaming" | "done" | "failed";
 export type ChatToolStatus = "running" | "done" | "failed" | "stale";
-export type ChatMessageKind = "chat.ready" | "chat.linked" | "chat.recorded";
+export type ChatMessageKind = "chat.ready" | "chat.linked" | "chat.recorded" | "chat.odw_result";
 
 export interface ChatToolEvent {
   type: string;
@@ -29,6 +30,7 @@ export interface ChatMessage {
   text: string;
   ts: number;
   kind?: ChatMessageKind;
+  status?: ChatMessageStatus;
   tool?: ChatToolCall;
 }
 
@@ -86,7 +88,12 @@ function validMessage(value: unknown): value is ChatMessage {
     (m.role === "user" || m.role === "assistant" || m.role === "tool") &&
     typeof m.text === "string" &&
     typeof m.ts === "number" &&
-    (m.kind === undefined || m.kind === "chat.ready" || m.kind === "chat.linked" || m.kind === "chat.recorded")
+    (m.kind === undefined ||
+      m.kind === "chat.ready" ||
+      m.kind === "chat.linked" ||
+      m.kind === "chat.recorded" ||
+      m.kind === "chat.odw_result") &&
+    (m.status === undefined || m.status === "streaming" || m.status === "done" || m.status === "failed")
   );
 }
 
@@ -128,6 +135,10 @@ export class ChatStore {
     return this.read().sessions.find((s) => s.id === id) ?? null;
   }
 
+  records(): ChatSessionRecord[] {
+    return this.read().sessions;
+  }
+
   create(source?: string): ChatSessionRecord {
     const ts = now();
     const session: ChatSessionRecord = {
@@ -153,25 +164,58 @@ export class ChatStore {
     return session;
   }
 
-  appendUserMessage(id: string, text: string): ChatSessionRecord {
+  appendUserMessage(id: string, text: string, kind?: ChatMessageKind): ChatSessionRecord {
     const data = this.read();
     const session = data.sessions.find((s) => s.id === id);
     if (!session) throw new Error(`no such chat session: ${id}`);
     const ts = now();
-    session.messages.push({ id: newId("msg"), role: "user", text, ts });
+    session.messages.push({ id: newId("msg"), role: "user", text, ts, ...(kind ? { kind } : {}) });
     if (session.title === "Untitled hosted turn") session.title = titleFrom(text);
     session.updatedAt = ts;
     this.write(data);
     return session;
   }
 
-  appendAssistantMessage(id: string, text: string, kind?: ChatMessageKind): ChatSessionRecord {
+  appendAssistantMessage(
+    id: string,
+    text: string,
+    kind?: ChatMessageKind,
+    status?: ChatMessageStatus,
+  ): ChatSessionRecord {
     const data = this.read();
     const session = data.sessions.find((s) => s.id === id);
     if (!session) throw new Error(`no such chat session: ${id}`);
     const ts = now();
-    session.messages.push({ id: newId("msg"), role: "assistant", text, ts, ...(kind ? { kind } : {}) });
+    session.messages.push({
+      id: newId("msg"),
+      role: "assistant",
+      text,
+      ts,
+      ...(kind ? { kind } : {}),
+      ...(status ? { status } : {}),
+    });
+    if (status === "streaming") session.state = "running";
     session.updatedAt = ts;
+    this.write(data);
+    return session;
+  }
+
+  updateMessage(
+    id: string,
+    messageId: string,
+    patch: { text?: string; status?: ChatMessageStatus },
+  ): ChatSessionRecord | null {
+    const data = this.read();
+    const session = data.sessions.find((s) => s.id === id);
+    if (!session) return null;
+    const message = session.messages.find((m) => m.id === messageId);
+    if (!message) return null;
+    if (patch.text !== undefined) message.text = patch.text;
+    if (patch.status !== undefined) message.status = patch.status;
+    const ts = now();
+    session.updatedAt = ts;
+    const stillStreaming = session.messages.some((m) => m.status === "streaming");
+    if (!stillStreaming && session.state === "running") session.state = "idle";
     this.write(data);
     return session;
   }
