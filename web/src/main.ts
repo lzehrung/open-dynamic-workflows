@@ -37,6 +37,8 @@ let wfDetail: WorkflowDetail | null = null;
 let poll: number | null = null;
 let chatDraft = "";
 let activeChatId: string | null = null;
+let composingChatInput = false;
+let deferredRender = false;
 
 function parseHash(): Route {
   const h = location.hash.replace(/^#\/?/, "");
@@ -97,6 +99,10 @@ function viewHtml(route: Route): string {
 }
 
 function render(): void {
+  if (composingChatInput && document.activeElement?.id === "chat-input") {
+    deferredRender = true;
+    return;
+  }
   const route = currentRoute();
   syncNative(store.runs); // drive Dock badge + native notifications when wrapped
   // render() is a full innerHTML swap fired on every store emit (SSE pushes,
@@ -112,6 +118,21 @@ function render(): void {
     statusbar() +
     `</div>`;
   restoreFocus(focus);
+}
+
+function hasStreamingChatAssistant(): boolean {
+  return Boolean(store.chat?.messages.some((m) => m.role === "assistant" && m.status === "streaming"));
+}
+
+function refreshChatComposer(): void {
+  const btn = root.querySelector<HTMLButtonElement>("[data-chat-send]");
+  if (!btn) return;
+  const locked = store.chatSending || hasStreamingChatAssistant() || !store.capabilities.writable;
+  const canSend = Boolean(store.chat && activeChatId && chatDraft.trim() && !locked);
+  btn.disabled = !canSend;
+  btn.classList.toggle("disabled", !canSend);
+  if (canSend) btn.removeAttribute("aria-disabled");
+  else btn.setAttribute("aria-disabled", "true");
 }
 
 const FOCUSABLE_IDS = new Set(["lf-task", "lf-source", "lf-adapter", "save-name", "save-scope", "chat-input"]);
@@ -476,8 +497,27 @@ root.addEventListener("input", (ev) => {
     chatDraft = el.value;
     if (store.chatError === "Message text is required." && el.value.trim()) {
       store.chatError = "";
+      root.querySelector(".chat-error")?.remove();
     }
+    refreshChatComposer();
+  }
+});
+
+root.addEventListener("compositionstart", (ev) => {
+  const el = ev.target as HTMLElement | null;
+  if (el?.id === "chat-input") composingChatInput = true;
+});
+
+root.addEventListener("compositionend", (ev) => {
+  const el = ev.target as HTMLTextAreaElement | null;
+  if (el?.id !== "chat-input") return;
+  composingChatInput = false;
+  chatDraft = el.value;
+  if (deferredRender) {
+    deferredRender = false;
     render();
+  } else {
+    refreshChatComposer();
   }
 });
 
