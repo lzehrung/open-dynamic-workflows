@@ -74,6 +74,7 @@ const ZH: Record<string, string> = {
   connecting: "连接中",
   reconnecting: "重新连接",
   "fan out coding agents": "并行调度编码智能体",
+  Chat: "对话",
   Activity: "动态",
   Workspace: "工作区",
   Jobs: "任务",
@@ -164,6 +165,20 @@ const ZH: Record<string, string> = {
   "Fleet — agents running, by adapter": "机群 — 各适配器运行中的智能体",
   "Live event stream": "实时事件流",
   "all runs · events.jsonl": "全部运行 · events.jsonl",
+
+  // Chat Host mock.
+  "Chat Host": "对话宿主",
+  "frontend mock": "前端 mock",
+  "+ New": "+ 新建",
+  "Host activity": "宿主动态",
+  "Linked ODW runs": "关联 ODW 运行",
+  "Tool contract": "工具协议",
+  "No linked ODW runs yet.": "暂无关联 ODW 运行。",
+  "Ask Codex. Mention ODW or workflow to render a mocked tool call.":
+    "向 Codex 提问。提到 ODW 或 workflow 会渲染一个 mock 工具调用。",
+  "No server calls yet — this is a mock interaction.": "暂不调用服务端——这是 mock 交互。",
+  Send: "发送",
+  "mock data": "mock 数据",
 
   // Job detail.
   Graph: "图",

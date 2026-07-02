@@ -11,6 +11,14 @@
 import { rail, statusbar, toolbar, type Route } from "./shell";
 import { store } from "./store";
 import { renderActivity } from "./views/activity";
+import {
+  chatDraft,
+  createMockSession,
+  renderChat,
+  selectChatSession,
+  sendMockChatMessage,
+  setChatDraft,
+} from "./views/chat";
 import { renderJob, saveForm, type JobTab } from "./views/job";
 import { renderJobs } from "./views/jobs";
 import { effectiveAdapter, launchForm, prefillLaunch, rememberDir, renderLaunch } from "./views/launch";
@@ -39,6 +47,8 @@ function parseHash(): Route {
   const h = location.hash.replace(/^#\/?/, "");
   const [view, ...rest] = h.split("/");
   switch (view) {
+    case "chat":
+      return { view: "chat", param: rest.length ? decodeURIComponent(rest[0]!) : null };
     case "workspace":
       return { view: "workspace", param: rest.length ? decodeURIComponent(rest[0]!) : null };
     case "jobs":
@@ -68,6 +78,8 @@ function currentRoute(): Route {
 
 function viewHtml(route: Route): string {
   switch (route.view) {
+    case "chat":
+      return renderChat();
     case "activity":
       return renderActivity();
     case "workspace":
@@ -101,7 +113,7 @@ function render(): void {
   restoreFocus(focus);
 }
 
-const FOCUSABLE_IDS = new Set(["lf-task", "lf-source", "lf-adapter", "save-name", "save-scope"]);
+const FOCUSABLE_IDS = new Set(["lf-task", "lf-source", "lf-adapter", "save-name", "save-scope", "chat-input"]);
 type FocusSnapshot = { id: string; start: number | null; end: number | null } | null;
 
 function captureFocus(): FocusSnapshot {
@@ -137,6 +149,9 @@ async function enterRoute(): Promise<void> {
   if (route.view === "activity") {
     await store.loadActivity();
     poll = window.setInterval(() => store.loadActivity(), 1500);
+  } else if (route.view === "chat") {
+    if (route.param) selectChatSession(route.param);
+    render();
   } else if (route.view === "workspace") {
     if (store.workflows === null) await store.loadWorkflows();
     // Default-select the first workflow (or the routed one). Keys are provider:name.
@@ -217,6 +232,25 @@ root.addEventListener("click", (ev) => {
   const wfEl = t.closest<HTMLElement>("[data-wf]");
   if (wfEl) {
     void selectWorkflow(wfEl.dataset.wf!);
+    return;
+  }
+  const chatSession = t.closest<HTMLElement>("[data-chat-session]");
+  if (chatSession) {
+    const id = chatSession.dataset.chatSession!;
+    selectChatSession(id);
+    history.replaceState(null, "", `#/chat/${encodeURIComponent(id)}`);
+    render();
+    return;
+  }
+  if (t.closest("[data-chat-new]")) {
+    const id = createMockSession();
+    history.replaceState(null, "", `#/chat/${encodeURIComponent(id)}`);
+    render();
+    return;
+  }
+  if (t.closest("[data-chat-send]")) {
+    sendMockChatMessage();
+    render();
     return;
   }
   const tabEl = t.closest<HTMLElement>("[data-tab]");
@@ -362,6 +396,18 @@ root.addEventListener("input", (ev) => {
   } else if (el.id === "lf-source") launchForm.source = el.value;
   else if (el.id === "save-name") saveForm.name = el.value;
   else if (el.id === "save-scope") saveForm.scope = el.value === "project" ? "project" : "global";
+  else if (el.id === "chat-input") setChatDraft(el.value);
+});
+
+root.addEventListener("keydown", (ev) => {
+  const el = ev.target as HTMLTextAreaElement | null;
+  if (el?.id === "chat-input" && ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
+    ev.preventDefault();
+    if (chatDraft.trim()) {
+      sendMockChatMessage();
+      render();
+    }
+  }
 });
 
 document.addEventListener("keydown", (e) => {
