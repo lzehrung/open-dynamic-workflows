@@ -11,9 +11,12 @@ import { api } from "./api";
 import type {
   AdapterListing,
   Capabilities,
+  ChatSession,
+  ChatSessionSummary,
   Connection,
   RunDetail,
   RunSummary,
+  SettingsSnapshot,
   WorkflowEvent,
   WorkflowSummary,
 } from "./types";
@@ -28,6 +31,9 @@ class Store {
   runs: RunSummary[] = [];
   workflows: WorkflowSummary[] | null = null;
   adapters: AdapterListing[] | null = null;
+  settings: SettingsSnapshot | null = null;
+  chatSessions: ChatSessionSummary[] | null = null;
+  chat: ChatSession | null = null;
   // Default writable = true (the loopback common case) until the probe answers,
   // so local use never flashes a read-only UI on first paint.
   capabilities: Capabilities = { writable: true };
@@ -119,6 +125,57 @@ class Store {
       // `adapters === null` guard retries on the next visit instead of caching a
       // permanently-empty picker from one transient failure.
       this.emit();
+    }
+  }
+
+  async loadSettings(): Promise<void> {
+    try {
+      this.settings = await api.settings();
+      this.emit();
+    } catch {
+      this.emit();
+    }
+  }
+
+  async loadChatSessions(): Promise<void> {
+    try {
+      this.chatSessions = await api.chatSessions();
+      this.emit();
+    } catch {
+      this.chatSessions = this.chatSessions ?? [];
+      this.emit();
+    }
+  }
+
+  async loadChatSession(id: string): Promise<void> {
+    try {
+      this.chat = await api.chatSession(id);
+      this.emit();
+    } catch {
+      this.chat = null;
+      this.emit();
+    }
+  }
+
+  async createChatSession(source?: string): Promise<ChatSession | null> {
+    try {
+      this.chat = await api.createChatSession(source ? { source } : {});
+      await this.loadChatSessions();
+      return this.chat;
+    } catch {
+      this.emit();
+      return null;
+    }
+  }
+
+  async sendChatMessage(id: string, text: string): Promise<ChatSession | null> {
+    try {
+      this.chat = await api.sendChatMessage(id, { text });
+      await this.loadChatSessions();
+      return this.chat;
+    } catch {
+      this.emit();
+      return null;
     }
   }
 

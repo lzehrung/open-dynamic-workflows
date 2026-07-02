@@ -166,19 +166,37 @@ const ZH: Record<string, string> = {
   "Live event stream": "实时事件流",
   "all runs · events.jsonl": "全部运行 · events.jsonl",
 
-  // Chat Host mock.
+  // Chat Host.
   "Chat Host": "对话宿主",
-  "frontend mock": "前端 mock",
+  "local backend": "本地后端",
   "+ New": "+ 新建",
   "Host activity": "宿主动态",
   "Linked ODW runs": "关联 ODW 运行",
   "Tool contract": "工具协议",
   "No linked ODW runs yet.": "暂无关联 ODW 运行。",
-  "Ask Codex. Mention ODW or workflow to render a mocked tool call.":
-    "向 Codex 提问。提到 ODW 或 workflow 会渲染一个 mock 工具调用。",
-  "No server calls yet — this is a mock interaction.": "暂不调用服务端——这是 mock 交互。",
+  "Ask Codex. Mention ODW or workflow to attach a local run.":
+    "向 Codex 提问。提到 ODW 或 workflow 会关联一次本地运行。",
+  "Messages are stored by the local backend.": "消息由本地后端保存。",
+  "The local backend will store messages and linked runs.": "本地后端会保存消息和关联运行。",
+  "No chat sessions yet": "暂无对话会话",
+  "No chat sessions yet.": "暂无对话会话。",
+  "Create a hosted turn to start.": "新建一个宿主回合开始。",
+  "Create a session first.": "请先新建会话。",
+  "Loading chat sessions...": "正在加载对话会话...",
+  "No messages yet.": "暂无消息。",
+  "Waiting for events...": "等待事件...",
+  "live data": "实时数据",
+  "stored by local server": "已由本地服务保存",
+  "watching ODW run": "正在观测 ODW 运行",
+  waiting: "等待中",
+  available: "可用",
+  missing: "缺失",
+  "Loading settings...": "正在加载设置...",
+  "Current project": "当前项目",
+  "Config file": "配置文件",
+  "built-in defaults": "内置默认值",
   Send: "发送",
-  "mock data": "mock 数据",
+  You: "你",
 
   // Job detail.
   Graph: "图",

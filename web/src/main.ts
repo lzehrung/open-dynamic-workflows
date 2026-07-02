@@ -11,14 +11,7 @@
 import { rail, statusbar, toolbar, type Route } from "./shell";
 import { store } from "./store";
 import { renderActivity } from "./views/activity";
-import {
-  chatDraft,
-  createMockSession,
-  renderChat,
-  selectChatSession,
-  sendMockChatMessage,
-  setChatDraft,
-} from "./views/chat";
+import { renderChat } from "./views/chat";
 import { renderJob, saveForm, type JobTab } from "./views/job";
 import { renderJobs } from "./views/jobs";
 import { effectiveAdapter, launchForm, prefillLaunch, rememberDir, renderLaunch } from "./views/launch";
@@ -42,6 +35,8 @@ let selectedAi: number | null = null;
 let wfActive: string | null = null;
 let wfDetail: WorkflowDetail | null = null;
 let poll: number | null = null;
+let chatDraft = "";
+let activeChatId: string | null = null;
 
 function parseHash(): Route {
   const h = location.hash.replace(/^#\/?/, "");
@@ -79,7 +74,7 @@ function currentRoute(): Route {
 function viewHtml(route: Route): string {
   switch (route.view) {
     case "chat":
-      return renderChat();
+      return renderChat(store.chatSessions, store.chat, chatDraft, activeChatId);
     case "activity":
       return renderActivity();
     case "workspace":
@@ -89,7 +84,7 @@ function viewHtml(route: Route): string {
     case "job":
       return renderJob(jobTab, selectedAi);
     case "settings":
-      return renderSettings();
+      return renderSettings(store.settings);
     case "launch":
       return renderLaunch();
   }
@@ -150,8 +145,21 @@ async function enterRoute(): Promise<void> {
     await store.loadActivity();
     poll = window.setInterval(() => store.loadActivity(), 1500);
   } else if (route.view === "chat") {
-    if (route.param) selectChatSession(route.param);
-    render();
+    if (store.chatSessions === null) await store.loadChatSessions();
+    const first = store.chatSessions?.[0]?.id ?? null;
+    const want = route.param ?? activeChatId ?? first;
+    activeChatId = want;
+    if (want) {
+      await store.loadChatSession(want);
+      poll = window.setInterval(async () => {
+        const r = currentRoute();
+        if (r.view !== "chat" || activeChatId !== want) return;
+        await store.loadChatSession(want);
+      }, 1500);
+    } else {
+      store.chat = null;
+      render();
+    }
   } else if (route.view === "workspace") {
     if (store.workflows === null) await store.loadWorkflows();
     // Default-select the first workflow (or the routed one). Keys are provider:name.
@@ -165,6 +173,9 @@ async function enterRoute(): Promise<void> {
   } else if (route.view === "launch") {
     render();
     if (store.adapters === null) await store.loadAdapters();
+  } else if (route.view === "settings") {
+    if (store.settings === null) await store.loadSettings();
+    render();
   } else if (route.view === "job" && route.param) {
     if (store.run?.runId !== route.param) {
       store.clearRun();
@@ -216,6 +227,16 @@ function go(hash: string): void {
   location.hash = hash;
 }
 
+async function sendChat(): Promise<void> {
+  const text = chatDraft.trim();
+  const id = activeChatId;
+  if (!id || !text) return;
+  chatDraft = "";
+  render();
+  const updated = await store.sendChatMessage(id, text);
+  if (updated) activeChatId = updated.id;
+}
+
 // --- click delegation (read-only affordances only) ---
 root.addEventListener("click", (ev) => {
   const t = ev.target as HTMLElement;
@@ -237,20 +258,24 @@ root.addEventListener("click", (ev) => {
   const chatSession = t.closest<HTMLElement>("[data-chat-session]");
   if (chatSession) {
     const id = chatSession.dataset.chatSession!;
-    selectChatSession(id);
+    activeChatId = id;
     history.replaceState(null, "", `#/chat/${encodeURIComponent(id)}`);
-    render();
+    void store.loadChatSession(id);
     return;
   }
   if (t.closest("[data-chat-new]")) {
-    const id = createMockSession();
-    history.replaceState(null, "", `#/chat/${encodeURIComponent(id)}`);
-    render();
+    void (async () => {
+      const created = await store.createChatSession();
+      if (!created) return;
+      activeChatId = created.id;
+      chatDraft = "";
+      history.replaceState(null, "", `#/chat/${encodeURIComponent(created.id)}`);
+      render();
+    })();
     return;
   }
   if (t.closest("[data-chat-send]")) {
-    sendMockChatMessage();
-    render();
+    void sendChat();
     return;
   }
   const tabEl = t.closest<HTMLElement>("[data-tab]");
@@ -396,17 +421,14 @@ root.addEventListener("input", (ev) => {
   } else if (el.id === "lf-source") launchForm.source = el.value;
   else if (el.id === "save-name") saveForm.name = el.value;
   else if (el.id === "save-scope") saveForm.scope = el.value === "project" ? "project" : "global";
-  else if (el.id === "chat-input") setChatDraft(el.value);
+  else if (el.id === "chat-input") chatDraft = el.value;
 });
 
 root.addEventListener("keydown", (ev) => {
   const el = ev.target as HTMLTextAreaElement | null;
   if (el?.id === "chat-input" && ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
     ev.preventDefault();
-    if (chatDraft.trim()) {
-      sendMockChatMessage();
-      render();
-    }
+    if (chatDraft.trim()) void sendChat();
   }
 });
 

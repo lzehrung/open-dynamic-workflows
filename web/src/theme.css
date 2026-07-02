@@ -247,7 +247,7 @@ body.is-native .crumb{ margin-left:0; }
 .runmini{ display:flex; align-items:center; gap:12px; padding:9px 12px; border:1px solid var(--hair); border-radius:9px; margin-bottom:7px; background:#fff; font-size:12.5px; cursor:pointer; } .runmini:hover{ border-color:var(--node-active); }
 .runmini .rid{ font-family:var(--mono); font-size:11.5px; color:var(--muted); } .runmini .when{ margin-left:auto; font-family:var(--mono); font-size:11px; color:var(--faint); }
 
-/* ===== Chat Host mock ===== */
+/* ===== Chat Host ===== */
 .chat-page{ position:absolute; inset:0; display:grid; grid-template-columns:292px minmax(420px,1fr) 340px; overflow:hidden; background:var(--bg); }
 .chat-list{ border-right:1px solid var(--hair); background:var(--alt); padding:16px 12px; overflow:auto; }
 .chat-list-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; padding:2px 8px 12px; }

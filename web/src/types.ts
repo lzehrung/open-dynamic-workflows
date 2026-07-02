@@ -74,6 +74,21 @@ export interface AdapterListing {
   permissionNote: string;
 }
 
+export interface SettingsSnapshot {
+  cwd: string;
+  configPath: string | null;
+  runsRoot: string;
+  writable: boolean;
+  claudeJobsScope: "all" | "project";
+  adapters: Array<AdapterListing & { command: string }>;
+  workflowRoots: Array<{
+    provider: "odw" | "claude";
+    scope: "project" | "global";
+    label: string;
+    path: string;
+  }>;
+}
+
 export interface WorkflowSummary {
   name: string;
   origin: "project" | "global";
@@ -103,4 +118,55 @@ export type Connection = "connecting" | "live" | "reconnecting";
 /** GET /api/capabilities — whether this dashboard may start/control runs. */
 export interface Capabilities {
   writable: boolean;
+}
+
+export type ChatRole = "user" | "assistant" | "tool";
+export type ChatSessionState = "running" | "idle" | "done";
+export type ChatToolStatus = "running" | "done" | "failed" | "stale";
+
+export interface ChatToolEvent {
+  type: string;
+  label: string;
+  ts: number;
+}
+
+export interface ChatToolCall {
+  name: "odw.run" | "odw.generate";
+  status: ChatToolStatus;
+  workflow: string;
+  runId: string;
+  progress: number;
+  phase: string;
+  events: ChatToolEvent[];
+  result?: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: ChatRole;
+  text: string;
+  ts: number;
+  tool?: ChatToolCall;
+}
+
+export interface ChatLinkedRun {
+  runId: string;
+  workflow: string;
+  state: RunDisplayState;
+  progress: number;
+}
+
+export interface ChatSessionSummary {
+  id: string;
+  title: string;
+  source: string;
+  state: ChatSessionState;
+  updatedAt: number;
+  lastMessage: string;
+  linkedRuns: number;
+}
+
+export interface ChatSession extends Omit<ChatSessionSummary, "lastMessage" | "linkedRuns"> {
+  messages: ChatMessage[];
+  linkedRuns: ChatLinkedRun[];
 }

@@ -8,8 +8,11 @@
 import type {
   AdapterListing,
   Capabilities,
+  ChatSession,
+  ChatSessionSummary,
   RunDetail,
   RunSummary,
+  SettingsSnapshot,
   WorkflowDetail,
   WorkflowEvent,
   WorkflowSummary,
@@ -46,8 +49,14 @@ export const api = {
     getJSON<WorkflowDetail>(`/api/workflows/${enc(name)}${provider ? `?provider=${enc(provider)}` : ""}`),
   adapters: () => getJSON<AdapterListing[]>("/api/adapters"),
   capabilities: () => getJSON<Capabilities>("/api/capabilities"),
+  settings: () => getJSON<SettingsSnapshot>("/api/settings"),
+  chatSessions: () => getJSON<ChatSessionSummary[]>("/api/chat/sessions"),
+  chatSession: (id: string) => getJSON<ChatSession>(`/api/chat/sessions/${enc(id)}`),
 
   // --- launch-layer writes ---
+  createChatSession: (body: { source?: string } = {}) => postJSON<ChatSession>("/api/chat/sessions", body),
+  sendChatMessage: (id: string, body: { text: string; adapter?: string; source?: string }) =>
+    postJSON<ChatSession>(`/api/chat/sessions/${enc(id)}/messages`, body),
   generate: (body: { task: string; adapter?: string; source?: string }) =>
     postJSON<{ runId: string }>("/api/generate", body),
   launchRun: (body: { script?: string; name?: string; args?: unknown; adapter?: string; source?: string }) =>

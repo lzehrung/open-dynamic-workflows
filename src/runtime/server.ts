@@ -50,6 +50,7 @@ import {
   listAdapters,
   loadConfig,
   resolveClaudeProjectsRoot,
+  resolveClaudeWorkflowsRoot,
   resolveWorkflowsRoot,
 } from "../adapters/config.js";
 import type { Config } from "../adapters/types.js";
@@ -58,11 +59,18 @@ import { loadWorkflowScript } from "../loader.js";
 import { SKILL_MD } from "../skill.generated.js";
 import { GENERATE_WORKFLOW_SOURCE, PATTERNS_DIGEST } from "../workflows/generate-workflow.js";
 import { ClaudeRunSource } from "./claude-run-source.js";
+import {
+  ChatStore,
+  type ChatMessage,
+  type ChatSessionRecord,
+  type ChatSessionState,
+  type ChatToolCall,
+} from "./chat-store.js";
 import { startRun, startRunFromSource } from "./launcher.js";
 import { OdwRunSource } from "./odw-run-source.js";
 import type { RunSource } from "./run-source.js";
 import { RunStore } from "./run-store.js";
-import type { RunSummary } from "./runs-view.js";
+import type { RunDisplayState, RunSummary } from "./runs-view.js";
 import { listWorkflowSummaries, workflowDetail } from "./workflows-view.js";
 import { isValidWorkflowName } from "../workflows/resolve.js";
 
@@ -96,6 +104,24 @@ const RUN_ID = /^[A-Za-z0-9._-]+$/;
 const CONTROL_ACTIONS = new Set(["pause", "resume", "stop"]);
 /** Body cap for write endpoints; inline scripts are the largest legitimate payload. */
 const MAX_BODY_BYTES = 512 * 1024;
+
+const CHAT_HOST_WORKFLOW_NAME = "chat-host-bridge";
+const CHAT_HOST_WORKFLOW_SOURCE = `
+export const meta = {
+  name: "${CHAT_HOST_WORKFLOW_NAME}",
+  description: "Bridge a local Chat Host turn into the ODW run stream.",
+  phases: [{ title: "Capture" }, { title: "Respond" }],
+}
+
+phase("Capture")
+log("Captured a local Chat Host turn.")
+phase("Respond")
+return {
+  summary: "The local Chat Host recorded this turn and linked it to the ODW run stream.",
+  prompt: args.prompt,
+  sessionId: args.sessionId,
+}
+`;
 
 const LOOPBACK_BINDS = new Set(["127.0.0.1", "localhost", "::1"]);
 const LOOPBACK_HOST_NAMES = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
@@ -218,10 +244,11 @@ export function startServer(options: ServeOptions): Promise<ServeHandle> {
       scope: options.claudeJobsScope ?? config.settings.claudeJobsScope,
     }),
   ];
+  const chat = new ChatStore(store.root, cwd);
   const clients = new Set<ServerResponse>();
 
   const server = createServer((req, res) => {
-    handle(req, res, { sources, store, clients, cwd, config, configPath, boundHost: host }).catch((err) => {
+    handle(req, res, { sources, store, chat, clients, cwd, config, configPath, boundHost: host }).catch((err) => {
       try {
         sendJson(res, 500, { error: (err as Error).message ?? "internal error" });
       } catch {
@@ -290,6 +317,7 @@ function closeServer(
 interface HandleContext {
   sources: RunSource[];
   store: RunStore;
+  chat: ChatStore;
   clients: Set<ServerResponse>;
   cwd: string;
   config: Config;
@@ -299,7 +327,7 @@ interface HandleContext {
 }
 
 async function handle(req: IncomingMessage, res: ServerResponse, ctx: HandleContext): Promise<void> {
-  const { sources, store, clients, cwd, config, configPath, boundHost } = ctx;
+  const { sources, store, chat, clients, cwd, config, configPath, boundHost } = ctx;
   const method = req.method ?? "GET";
   const url = new URL(req.url ?? "/", "http://localhost");
   const path = url.pathname;
@@ -340,6 +368,42 @@ async function handle(req: IncomingMessage, res: ServerResponse, ctx: HandleCont
       // buttons. Mirrors the writeGuard's loopback-only rule exactly.
       sendJson(res, 200, { writable: isLoopbackBind(boundHost) });
       return;
+    }
+    if (method === "GET" && path === "/api/settings") {
+      sendJson(res, 200, settingsView(store, config, cwd, configPath, boundHost));
+      return;
+    }
+    if (method === "GET" && path === "/api/chat/sessions") {
+      sendJson(
+        res,
+        200,
+        chat.list().map((s) => hydrateChatSummary(s, chat.get(s.id), sources)),
+      );
+      return;
+    }
+    if (method === "POST" && path === "/api/chat/sessions") {
+      if (!writeGuard(req, res, boundHost)) return;
+      await postChatSession(req, res, chat, sources, cwd);
+      return;
+    }
+    const chatMatch = path.match(/^\/api\/chat\/sessions\/([^/]+)(\/messages)?$/);
+    if (chatMatch) {
+      const sessionId = decodeURIComponent(chatMatch[1]!);
+      const sub = chatMatch[2];
+      if (method === "GET" && !sub) {
+        const session = chat.get(sessionId);
+        if (!session) {
+          sendJson(res, 404, { error: `no such chat session: ${sessionId}` });
+          return;
+        }
+        sendJson(res, 200, hydrateChatSession(session, sources));
+        return;
+      }
+      if (method === "POST" && sub === "/messages") {
+        if (!writeGuard(req, res, boundHost)) return;
+        await postChatMessage(req, res, chat, sources, store, config, configPath, sessionId);
+        return;
+      }
     }
     if (method === "POST" && path === "/api/generate") {
       if (!writeGuard(req, res, boundHost)) return;
@@ -427,6 +491,223 @@ async function handle(req: IncomingMessage, res: ServerResponse, ctx: HandleCont
   } catch (err) {
     sendJson(res, 500, { error: (err as Error).message ?? "internal error" });
   }
+}
+
+// --- settings + chat host endpoints ------------------------------------------
+
+function settingsView(
+  store: RunStore,
+  config: Config,
+  cwd: string,
+  configPath: string | null,
+  boundHost: string,
+): Record<string, unknown> {
+  return {
+    cwd,
+    configPath,
+    runsRoot: store.root,
+    writable: isLoopbackBind(boundHost),
+    claudeJobsScope: config.settings.claudeJobsScope,
+    adapters: listAdapters(config).map((a) => ({
+      ...a,
+      command: config.adapters[a.name]?.command.join(" ") ?? "",
+    })),
+    workflowRoots: [
+      { provider: "odw", scope: "project", label: ".odw/workflows", path: join(cwd, ".odw", "workflows") },
+      { provider: "claude", scope: "project", label: ".claude/workflows", path: join(cwd, ".claude", "workflows") },
+      {
+        provider: "odw",
+        scope: "global",
+        label: "~/.odw/workflows",
+        path: resolveWorkflowsRoot(config.settings.workflowsRoot),
+      },
+      {
+        provider: "claude",
+        scope: "global",
+        label: "~/.claude/workflows",
+        path: resolveClaudeWorkflowsRoot(config.settings.claudeWorkflowsRoot),
+      },
+    ],
+  };
+}
+
+function wantsOdw(text: string): boolean {
+  return /\bodw\b|workflow|agent|fan[- ]?out|并行|工作流|智能体/i.test(text);
+}
+
+function chatStateFrom(states: RunDisplayState[], fallback: ChatSessionState): ChatSessionState {
+  if (states.some((s) => s === "pending" || s === "running" || s === "paused" || s === "stale")) return "running";
+  if (states.length > 0 && states.every((s) => s === "done" || s === "failed" || s === "stopped")) return "done";
+  return fallback;
+}
+
+function toolStatus(state: RunDisplayState | undefined): ChatToolCall["status"] {
+  if (state === "failed" || state === "stopped") return "failed";
+  if (state === "stale") return "stale";
+  if (state === "done") return "done";
+  return "running";
+}
+
+function eventLabel(ev: Record<string, unknown>): string {
+  if (typeof ev.label === "string") return ev.label;
+  if (typeof ev.phase === "string") return ev.phase;
+  if (typeof ev.message === "string") return ev.message;
+  return String(ev.type ?? "event");
+}
+
+function resultText(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function hydrateTool(tool: ChatToolCall, sources: RunSource[]): ChatToolCall {
+  const src = RUN_ID.test(tool.runId) ? sourceForRun(sources, tool.runId) : null;
+  if (!src) return tool;
+  const detail = src.detail(tool.runId);
+  if (!detail) return tool;
+  const events = src.events(tool.runId, 0);
+  const lastPhase =
+    [...events]
+      .reverse()
+      .map((ev) => (typeof ev.phase === "string" ? ev.phase : null))
+      .find((phase): phase is string => phase !== null) ??
+    detail.phaseOrder[detail.phaseOrder.length - 1] ??
+    detail.state;
+  const result = src.result(tool.runId);
+  return {
+    ...tool,
+    status: toolStatus(detail.state),
+    workflow: detail.workflowName ?? detail.name ?? tool.workflow,
+    progress: detail.progress,
+    phase: lastPhase,
+    events: events.slice(-8).map((ev) => ({
+      type: ev.type,
+      label: eventLabel(ev),
+      ts: ev.ts,
+    })),
+    ...(result.has ? { result: resultText(result.value) } : {}),
+  };
+}
+
+function hydrateChatSession(session: ChatSessionRecord, sources: RunSource[]): Record<string, unknown> {
+  const linkedRuns = session.linkedRuns.map((link) => {
+    const src = RUN_ID.test(link.runId) ? sourceForRun(sources, link.runId) : null;
+    const detail = src?.detail(link.runId) ?? null;
+    return {
+      runId: link.runId,
+      workflow: detail?.workflowName ?? detail?.name ?? link.workflow,
+      state: detail?.state ?? "stale",
+      progress: detail?.progress ?? 0,
+    };
+  });
+  const messages = session.messages.map((message): ChatMessage => {
+    if (!message.tool) return message;
+    return { ...message, tool: hydrateTool(message.tool, sources) };
+  });
+  return {
+    ...session,
+    state: chatStateFrom(
+      linkedRuns.map((r) => r.state as RunDisplayState),
+      session.state,
+    ),
+    linkedRuns,
+    messages,
+  };
+}
+
+function hydrateChatSummary(
+  summary: ReturnType<ChatStore["list"]>[number],
+  session: ChatSessionRecord | null,
+  sources: RunSource[],
+): Record<string, unknown> {
+  if (!session) return { ...summary };
+  const view = hydrateChatSession(session, sources) as {
+    state: ChatSessionState;
+    linkedRuns: Array<Record<string, unknown>>;
+  };
+  return { ...summary, state: view.state, linkedRuns: view.linkedRuns.length };
+}
+
+async function postChatSession(
+  req: IncomingMessage,
+  res: ServerResponse,
+  chat: ChatStore,
+  sources: RunSource[],
+  cwd: string,
+): Promise<void> {
+  const body = await readJsonBody(req);
+  if (!body) {
+    sendJson(res, 400, { error: "body must be a JSON object" });
+    return;
+  }
+  const source = typeof body.source === "string" && body.source.trim() ? body.source.trim() : cwd;
+  const session = chat.create(source);
+  sendJson(res, 200, hydrateChatSession(session, sources));
+}
+
+async function postChatMessage(
+  req: IncomingMessage,
+  res: ServerResponse,
+  chat: ChatStore,
+  sources: RunSource[],
+  store: RunStore,
+  config: Config,
+  configPath: string | null,
+  sessionId: string,
+): Promise<void> {
+  const body = await readJsonBody(req);
+  if (!body) {
+    sendJson(res, 400, { error: "body must be a JSON object" });
+    return;
+  }
+  const text = typeof body.text === "string" ? body.text.trim() : "";
+  if (!text) {
+    sendJson(res, 400, { error: "text must be a non-empty string" });
+    return;
+  }
+  const existing = chat.get(sessionId);
+  if (!existing) {
+    sendJson(res, 404, { error: `no such chat session: ${sessionId}` });
+    return;
+  }
+  chat.appendUserMessage(sessionId, text);
+  if (wantsOdw(text)) {
+    const launchBody = {
+      adapter: typeof body.adapter === "string" ? body.adapter : undefined,
+      source: typeof body.source === "string" && body.source ? body.source : existing.source,
+    };
+    const checked = checkLaunchInputs(res, config, launchBody);
+    if (!checked) return;
+    const { runId } = startRunFromSource(CHAT_HOST_WORKFLOW_SOURCE, {
+      args: { prompt: text, sessionId },
+      adapter: checked.adapter,
+      source: checked.source,
+      runsRoot: store.root,
+      configPath,
+      origin: "chat",
+    });
+    chat.appendToolRun(sessionId, runId, CHAT_HOST_WORKFLOW_NAME);
+    chat.appendAssistantMessage(
+      sessionId,
+      "I linked this turn to a local ODW run. The tool card will update from the run stream as it settles.",
+    );
+  } else {
+    chat.appendAssistantMessage(
+      sessionId,
+      "I recorded this turn in the local Chat Host. Mention ODW or workflow when you want this conversation to attach a run.",
+    );
+  }
+  const updated = chat.get(sessionId);
+  if (!updated) {
+    sendJson(res, 404, { error: `no such chat session: ${sessionId}` });
+    return;
+  }
+  sendJson(res, 200, hydrateChatSession(updated, sources));
 }
 
 // --- write endpoints (launch.md §3.1) ------------------------------------------
