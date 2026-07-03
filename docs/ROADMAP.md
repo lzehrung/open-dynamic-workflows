@@ -1,7 +1,7 @@
 # Open Dynamic Workflows — 模块路线图
 
 > 组织方式：先说清「项目是什么」，再按「提供哪些模块」展开成一棵树。
-> 本期主线只有三件事：**运行引擎 → 运行记录 → 只读客户端**。
+> 本期主线只有三件事：**运行引擎 → 运行记录 → 客户端观测 / Chat Host**。
 > 分发、参数表单、机器可读参数契约等，明确不在本期（见 §5）。
 > 重写日期：2026-06-05
 
@@ -9,12 +9,12 @@
 
 ## 0. 项目是什么
 
-**ODW 是一个动态工作流的运行时**：用 Claude Code 方言（`export const meta` + 注入 `agent / parallel / pipeline / ...`）写一次工作流脚本，既能在 Claude Code 本体跑，也能经 `odw` 在 Codex / Gemini / Qwen / Kimi / 自定义 CLI 上**原样跑**；再配一个只读客户端，看这些工作流和它们的运行。
+**ODW 是一个动态工作流的运行时**：用 Claude Code 方言（`export const meta` + 注入 `agent / parallel / pipeline / ...`）写一次工作流脚本，既能在 Claude Code 本体跑，也能经 `odw` 在 Codex / Gemini / Qwen / Kimi / 自定义 CLI 上**原样跑**；再配一个客户端，看这些工作流和它们的运行，并承载本地 Chat Host。
 
 两条贯穿全局的事实——它们决定了下面所有取舍：
 
-- **发起运行工作流的，永远是 Agent（走 CLI）。** 没有「人填表单去跑工作流」这回事。
-- **客户端是只读窗口。** 只展示，不发起。
+- **通用 workflow 发起仍由 Agent / CLI 负责。** 没有 Launch 表单，也不接受浏览器直接提交 inline workflow。
+- **客户端写能力保持窄口径。** 允许本地 Chat Host 会话/消息、App 偏好、适配器配置，以及 ODW 自己 run 的控制；Claude provider 仍只读。
 
 根基（也是与单纯「换个 CLI 跑」的区别）：**Claude Code 方言的忠实保真 + 工作流可移植**。
 
@@ -99,14 +99,14 @@ Open Dynamic Workflows (ODW)
 
 ---
 
-## 3.5 ③ 发起层（Launch）— 观测台升级为发射台（2026-06-11 落地）
+## 3.5 ③ Chat Host 与 Launch 退役（2026-07-03）
 
-> 完整任务拆解与决策记录：[`docs/tasks/launch.md`](tasks/launch.md)。②的「只读」铁律在此**有意修订**（不是漂移）：GUI 可以发起、控制 **ODW 自己的** run；Claude provider 仍严格只读；Tauri 壳零扩权（写全走 `odw serve` 的 loopback HTTP API）。
+> 早期的 Launch / 发射台路线已从前后端删除：不再提供 `#/launch`、`GET /api/adapters`、`POST /api/generate`、`POST /api/runs`、`POST /api/workflows`。当前 App 入口收敛为 Chat Host + Jobs / Workspace / Activity 观测；Claude provider 仍严格只读。
 
-- **用户流（单次任务式）**：Launch 视图描述任务 + 选 agent → `POST /api/generate` 启动**生成 run**（生成本身就是一个 workflow：Generate → Validate → Repair，live DAG 全程可观测）→ Result tab 特化为脚本预览 + 权限说明 + `[Run]` 确认闸 → 正式 run 跑完后 `[Save to Workspace]` 沉淀为可复用 workflow（`odw run <name>` 同样可跑）。
-- **引擎三缝（CLI 同样受益）**：`validate(source)` 原语（workflow 生成 workflow 的自举能力）；run 级 adapter 覆盖（`odw run --adapter <name>`）；`startRunFromSource`（生成的脚本随 run 留档于 run 目录）。
-- **方言完备性（同期补齐）**：嵌套 `workflow()` 已实现（单层、共享调度与预算，Claude Code 对齐）；`budget.spent()` 从桩升级为估算计量（chars/4），`--budget` 成为真上限。
-- **安全面**：所有写端点过 `writeGuard`（Content-Type + same-origin）+ Host 头校验（防 DNS rebinding）；off-loopback bind 写一律 409。
+- **当前用户流**：在 Chat 中正常和 Codex 对话；提到 ODW 或 workflow 时，Chat Host 将该回合关联到真实异步 ODW run，run 完成后以 user message 形式恢复会话并触发下一轮 Codex 工作。
+- **保留的引擎能力（CLI 同样受益）**：`validate(source)` 原语；run 级 adapter 覆盖（`odw run --adapter <name>`）；`startRunFromSource`（内联脚本随 run 留档于 run 目录）。
+- **方言完备性**：嵌套 `workflow()` 已实现（单层、共享调度与预算，Claude Code 对齐）；`budget.spent()` 从桩升级为估算计量（chars/4），`--budget` 成为真上限。
+- **安全面**：本地写能力仅保留 Chat 会话/消息、ODW run 控制与配置类接口，继续通过 `writeGuard`（Content-Type + same-origin）+ Host 头校验（防 DNS rebinding）收敛。
 
 ---
 

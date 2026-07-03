@@ -14,7 +14,7 @@ export interface ChatToolEvent {
 }
 
 export interface ChatToolCall {
-  name: "odw.run" | "odw.generate";
+  name: "odw.run";
   status: ChatToolStatus;
   workflow: string;
   runId: string;

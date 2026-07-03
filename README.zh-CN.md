@@ -6,12 +6,12 @@
 
 **Dynamic workflows for coding agents。** 一个开放运行时,把 Codex、Claude Code、
 Gemini、Qwen、Kimi 编排成可调度的机群——与 Claude Code 自带 Workflow 工具同一方言,
-外加一个能生成、发起并实时观测每次运行的桌面应用。
+外加一个能和 Codex 对话、实时观测每次运行的桌面应用。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/Node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](tsconfig.json)
-[![tests](https://img.shields.io/badge/tests-235%20passing-brightgreen.svg)](tests)
+[![tests](https://img.shields.io/badge/tests-251%20passing-brightgreen.svg)](tests)
 [![runtime deps](https://img.shields.io/badge/runtime%20deps-0-blue.svg)](package.json)
 
 [English](README.md) · [简体中文](README.zh-CN.md)
@@ -62,9 +62,9 @@ workflow,就成了你在任何 agent 上都能跑的资产。
 - **Claude Code 方言,完整支持** —— `export const meta` + 注入的 `agent` / `parallel` /
   `pipeline` / `phase` / `log` / `args` / `budget` / `workflow` 全局(含嵌套
   workflow),支持顶层 `await` 和 `return`。为 Claude Code 写的脚本在这里照跑,反之亦然。
-- **不只是观测台,还是发射台** —— 在 App 里描述一个任务,由 agent 生成 workflow(生成
-  过程本身就是一个 workflow),预览脚本与 agent 权限后再运行,实时观测 DAG,好用的一键
-  收藏进工作区。
+- **带 Chat Host 的实时观测台** —— 在 App 里和 Codex 正常对话;提到 ODW 或 workflow
+  的回合会关联到真实异步运行,CLI 发起的 job 也会以实时 DAG 展示,不会污染宿主 agent
+  的上下文。
 - **在上下文之外、大规模** —— 计划留在代码里,中间产物不污染宿主上下文,可扇出几十个
   subagent。
 - **可靠的交接** —— JSON-Schema 结构化输出,自动校验与重试,让多阶段流水线稳定组合,而
@@ -232,7 +232,7 @@ odw serve --port 8080 --host 0.0.0.0    # 自定义端口 / 绑定地址
 
 ![odw serve —— 一次 deep-research 运行的实时看板:阶段分栏(Search → Extract → Vote → Report)、每个 agent 的卡片(适配器 + 耗时)、实时状态](assets/odw-dashboard.png)
 
-**更想要原生 App?** 同一套看板也以只读桌面**观测台**(Tauri 壳)的形式发布,可从 Dock /
+**更想要原生 App?** 同一套看板也以桌面**观测台**(Tauri 壳)的形式发布,可从 Dock /
 托盘随时看到运行:
 
 <table>
@@ -248,44 +248,19 @@ odw serve --port 8080 --host 0.0.0.0    # 自定义端口 / 绑定地址
   </tr>
 </table>
 
-## 发射台:任务进,运行中的 workflow 出
+## App:对话、观测、检查
 
-App 不只是观测台,也是发射台。描述一个任务、选一个 agent;ODW 会**为它生成一个
-dynamic workflow**——生成本身就是一个 workflow(`Generate → Validate → Repair`),
-所以你可以像看任何 job 一样,实时看着它被造出来:
-
-<table>
-  <tr>
-    <td width="50%">
-      <strong>1 · 描述任务</strong><br />
-      <img src="assets/app-screenshots/launch.png" alt="Launch 视图:任务描述、带权限说明的 agent 选择器、工作目录" />
-    </td>
-    <td width="50%">
-      <strong>2 · 预览,再决定</strong><br />
-      <img src="assets/app-screenshots/launch-preview.png" alt="生成的 workflow 预览:phase 标签、语法高亮的脚本、agent 权限说明、运行与重新生成按钮" />
-    </td>
-  </tr>
-</table>
-
-在你按下 **Run** 之前什么都不会跑——预览页展示生成的脚本、它的 phase 结构,以及所选
-agent 将以什么权限姿态运行。跑完之后,**Save to Workspace** 把好用的一次性脚本沉淀成
-有名字、可复用的 workflow(`odw run <name>` 立即可用)。
-
-<div align="center">
-  <img src="assets/app-screenshots/launch-live-run.png" alt="生成的对抗评审 workflow 实时运行:一个 finder agent 扇出到三个并行 refuter agent,头部带 Stop 按钮" width="720" />
-  <br /><sub><b>一次生成 workflow 的真实运行。</b>任务:"对抗式评审 <code>rate-limiter.js</code>"。生成脚本的 finder 报了 3 个候选 bug;三个并行 refuter 随后驳倒了那个似是而非的(单线程 Node 里根本无法交错的"竞态"),确认了两个真 bug——这正是对抗验证存在的意义。</sub>
-</div>
-
-同一条链路也可脚本化:
+App 是观测台,也带一个本地 Chat Host。普通问题就像正常 Codex 对话一样使用;当某个回合
+提到 ODW 或 workflow,它会关联到真实的后台运行。CLI 发起的运行(`odw run <name>`)和
+Chat 关联的 ODW 任务都会出现在 Jobs 里,以实时 DAG、日志和最终结果展示。
 
 ```bash
-curl -X POST http://127.0.0.1:4317/api/generate \
-  -H 'content-type: application/json' \
-  -d '{"task": "对抗式评审 src/rate-limiter.js", "adapter": "claude"}'
+odw run adversarial-verify --args '{"question":"review src/rate-limiter.js"}'
+odw logs --workflow adversarial-verify --follow
 ```
 
-写端点仅限 loopback,并带 CSRF / DNS-rebinding 防护;`--host` 绑定到非回环地址时,
-看板仍可读,但所有写操作一律拒绝。Claude Code 自己的运行始终严格只读。
+看板可以在非 loopback 地址上查看,但本地写操作(例如 Chat 消息和停止 ODW 自己的运行)
+仍由 loopback server 保护。Claude Code 自己的运行始终严格只读。
 
 ## 配置适配器
 
@@ -384,19 +359,18 @@ npm run build:binary  # 打包 + Node SEA + postject → 单个自包含的 ./bu
 
 ## 状态
 
-**最新(`main` 上,未发版):发起层**——App 从观测台升级为发射台。描述任务 → agent
-**生成 workflow**(生成过程本身就是一个 workflow,可实时观看)→ 预览脚本 + agent 权限
-→ 运行 → 好用的收藏进工作区。引擎侧方言也补**完整**了:嵌套 `workflow()` 已实现(共享
-调度与预算,仅一层),`budget.spent()` 从桩升级为真实(估算)计量、`--budget` 成为硬上
-限,外加 `odw run --adapter <name>`、随 run 留档的内联脚本运行,以及让 workflow 能生成
-workflow 的 `validate()` 原语。
+**最新(`main` 上,未发版):Chat Host**——App 现在带本地 Chat Host:提到 ODW 的回合会交给
+真实异步 ODW 运行,结果返回后再恢复会话。引擎侧方言也补**完整**了:嵌套 `workflow()`
+已实现(共享调度与预算,仅一层),`budget.spent()` 从桩升级为真实(估算)计量、`--budget`
+成为硬上限,外加 `odw run --adapter <name>`、随 run 留档的内联脚本运行,以及让 workflow
+能生成 workflow 的 `validate()` 原语。
 
 **v0.3.0:****Jobs** 标签页也会展示 **Claude Code 自己的 workflow 运行**——已完成的
 历史与正在跑的实时任务——只读,并与 ODW 自己的 run 合并。(v0.2.4 带来了观测台 App 本
 身。)见 [Releases](https://github.com/xz1220/open-dynamic-workflows/releases)。
 
 **核心运行时已交付。** 完整运行时已在 `main` 上——适配层、执行桥接、工作区隔离、异步调度器、
-注入原语、loader/transform、JSON-Schema 引擎、后台运行时,以及 `odw` CLI。**235 个测试
+注入原语、loader/transform、JSON-Schema 引擎、后台运行时,以及 `odw` CLI。**251 个测试
 通过**,旗舰示例 [`examples/deep-research.js`](examples/deep-research.js) 端到端跑通
 (plan → gather → verify → synthesize → critique)。
 

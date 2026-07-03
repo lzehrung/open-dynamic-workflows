@@ -169,7 +169,7 @@ export function resolveAdapter(config: Config, name?: string | null): Adapter {
   return adapter;
 }
 
-/** One row of `GET /api/adapters` / the Launch view's agent picker. */
+/** One adapter row shown in settings and config diagnostics. */
 export interface AdapterListing {
   name: string;
   /** Display label (adapter.label, else the name). */

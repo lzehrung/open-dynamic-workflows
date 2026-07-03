@@ -14,10 +14,6 @@
  *   GET  /api/runs/:id           RunDetail
  *   GET  /api/runs/:id/events    raw events (optionally ?since=N for the tail)
  *   GET  /api/stream             text/event-stream; pushes the run list on change
- *   GET  /api/adapters           [AdapterListing] — the Launch view's agent picker
- *   POST /api/generate           { task, adapter?, source? } → { runId } (generation run)
- *   POST /api/runs               { script | name, args?, adapter?, source? } → { runId }
- *   POST /api/workflows          { name, source, scope, projectDir? } → { path } (save)
  *   POST /api/runs/:id/control   { action: pause|resume|stop } → writeControl
  *
  * Security: binds 127.0.0.1 by default. The run list aggregates every project's
@@ -28,22 +24,19 @@
  * final result, NOT raw agent transcripts; narrow it with `claudeJobsScope:
  * "project"` to the served repo + its worktrees.
  *
- * Write-path security (launch.md §3.5): POST /api/runs accepts inline scripts —
- * an HTTP handle on "drive a local coding agent" — so the realistic threat is a
- * hostile web page reaching loopback through the user's browser, not the local
- * machine (local processes can already run code). Defenses:
+ * Write-path security: POST routes can drive local state, so the realistic
+ * threat is a hostile web page reaching loopback through the user's browser,
+ * not the local machine (local processes can already run code). Defenses:
  *   1. writeGuard on every POST: Content-Type must be application/json (kills
  *      CORS "simple requests") and, when an Origin header is present, it must be
  *      same-origin.
  *   2. Host-header allowlist on loopback binds (DNS-rebinding guard, all routes).
- *   3. Off-loopback binds (--host) refuse every write with 409 — the dashboard
- *      can be viewed remotely, the launch pad cannot; token auth is a future
- *      opt-in gate.
+ *   3. Off-loopback binds (--host) refuse every write with 409.
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, statSync, watch, writeFileSync, type FSWatcher } from "node:fs";
+import { mkdirSync, statSync, watch, type FSWatcher } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -56,9 +49,6 @@ import {
 } from "../adapters/config.js";
 import type { Config } from "../adapters/types.js";
 import { DASHBOARD_HTML } from "../dashboard.generated.js";
-import { loadWorkflowScript } from "../loader.js";
-import { SKILL_MD } from "../skill.generated.js";
-import { GENERATE_WORKFLOW_SOURCE, PATTERNS_DIGEST } from "../workflows/generate-workflow.js";
 import { ClaudeRunSource } from "./claude-run-source.js";
 import {
   ChatStore,
@@ -67,13 +57,12 @@ import {
   type ChatSessionState,
   type ChatToolCall,
 } from "./chat-store.js";
-import { startRun, startRunFromSource } from "./launcher.js";
+import { startRunFromSource } from "./launcher.js";
 import { OdwRunSource } from "./odw-run-source.js";
 import type { RunSource } from "./run-source.js";
 import { RunStore } from "./run-store.js";
 import type { RunDisplayState, RunSummary } from "./runs-view.js";
 import { listWorkflowSummaries, workflowDetail } from "./workflows-view.js";
-import { isValidWorkflowName } from "../workflows/resolve.js";
 
 export interface ServeOptions {
   store: RunStore;
@@ -162,7 +151,7 @@ function hostHeaderName(header: string): string {
 }
 
 /**
- * The write-path gate shared by every POST (launch.md §3.5). Returns true when
+ * The write-path gate shared by every POST. Returns true when
  * the request may proceed; otherwise the response has been written.
  */
 function writeGuard(req: IncomingMessage, res: ServerResponse, boundHost: string): boolean {
@@ -384,14 +373,10 @@ async function handle(req: IncomingMessage, res: ServerResponse, ctx: HandleCont
       openStream(res, sources, clients);
       return;
     }
-    if (method === "GET" && path === "/api/adapters") {
-      sendJson(res, 200, listAdapters(config));
-      return;
-    }
     if (method === "GET" && path === "/api/capabilities") {
-      // The SPA hides write affordances (Launch form, Run/Save/Stop) when writes
-      // are refused, so a remotely-viewed off-loopback dashboard shows no dead
-      // buttons. Mirrors the writeGuard's loopback-only rule exactly.
+      // The SPA hides local write affordances when writes are refused, so a
+      // remotely-viewed off-loopback dashboard shows no dead buttons. Mirrors
+      // the writeGuard's loopback-only rule exactly.
       sendJson(res, 200, { writable: isLoopbackBind(boundHost) });
       return;
     }
@@ -437,21 +422,6 @@ async function handle(req: IncomingMessage, res: ServerResponse, ctx: HandleCont
         await postChatMessage(req, res, chat, chatRuntime, sources, store, config, configPath, sessionId);
         return;
       }
-    }
-    if (method === "POST" && path === "/api/generate") {
-      if (!writeGuard(req, res, boundHost)) return;
-      await postGenerate(req, res, store, config, configPath, cwd);
-      return;
-    }
-    if (method === "POST" && path === "/api/runs") {
-      if (!writeGuard(req, res, boundHost)) return;
-      await postRuns(req, res, store, config, configPath, cwd);
-      return;
-    }
-    if (method === "POST" && path === "/api/workflows") {
-      if (!writeGuard(req, res, boundHost)) return;
-      await postWorkflows(req, res, store, config, cwd);
-      return;
     }
     if (method === "GET" && path === "/api/workflows") {
       sendJson(res, 200, listWorkflowSummaries(cwd, config, store));
@@ -957,7 +927,7 @@ async function postChatMessage(
       adapter: typeof body.adapter === "string" ? body.adapter : undefined,
       source: typeof body.source === "string" && body.source ? body.source : existing.source,
     };
-    const checked = checkLaunchInputs(res, config, launchBody);
+    const checked = checkChatRunInputs(res, config, launchBody);
     if (!checked) return;
     const { runId } = startRunFromSource(CHAT_HOST_WORKFLOW_SOURCE, {
       args: { prompt: text, sessionId },
@@ -979,25 +949,20 @@ async function postChatMessage(
   sendJson(res, 200, hydrateChatSession(updated, sources));
 }
 
-// --- write endpoints (launch.md §3.1) ------------------------------------------
-
 /**
- * A stable, empty, copy-safe scratch directory used when a GUI launch names no
- * source. The serve process's cwd is NOT a safe default: when the desktop app
- * spawns the sidecar, that cwd is `/`, and copy-mode workspace isolation cannot
- * copy `/` into its own temp subdirectory (ERR_FS_CP_EINVAL). An empty scratch
- * dir copies instantly and lets generic workflows (those that don't read the
- * user's files) run; a workflow that must see project files needs an explicit
- * source, which is the correct requirement.
+ * A stable, empty, copy-safe scratch directory used when a Chat-triggered ODW
+ * turn has no project source. The serve process's cwd is NOT a safe default:
+ * in the desktop app it can be `/`, and copy-mode isolation cannot copy `/`
+ * into its own temp subdirectory.
  */
 function scratchSourceDir(): string {
-  const dir = join(tmpdir(), "odw-launch-scratch");
+  const dir = join(tmpdir(), "odw-chat-scratch");
   mkdirSync(dir, { recursive: true });
   return dir;
 }
 
-/** Shared adapter/source validation for the two launch endpoints. */
-function checkLaunchInputs(
+/** Validate adapter/source values before the Chat Host starts an ODW run. */
+function checkChatRunInputs(
   res: ServerResponse,
   config: Config,
   body: Record<string, unknown>,
@@ -1036,162 +1001,6 @@ function checkLaunchInputs(
     return { adapter, source: body.source };
   }
   return { adapter, source: scratchSourceDir() };
-}
-
-/** POST /api/generate — start a generation run of the built-in generate-workflow. */
-async function postGenerate(
-  req: IncomingMessage,
-  res: ServerResponse,
-  store: RunStore,
-  config: Config,
-  configPath: string | null,
-  cwd: string,
-): Promise<void> {
-  const body = await readJsonBody(req);
-  if (!body) {
-    sendJson(res, 400, { error: "body must be a JSON object" });
-    return;
-  }
-  const task = typeof body.task === "string" ? body.task.trim() : "";
-  if (!task) {
-    sendJson(res, 400, { error: "task must be a non-empty string" });
-    return;
-  }
-  const checked = checkLaunchInputs(res, config, body);
-  if (!checked) return;
-  const { runId } = startRunFromSource(GENERATE_WORKFLOW_SOURCE, {
-    args: { task, dialectDoc: SKILL_MD, patternsDigest: PATTERNS_DIGEST },
-    adapter: checked.adapter,
-    source: checked.source,
-    runsRoot: store.root,
-    configPath,
-    origin: "launch",
-  });
-  sendJson(res, 200, { runId });
-}
-
-/** POST /api/runs — start a run from inline source or a managed-directory name. */
-async function postRuns(
-  req: IncomingMessage,
-  res: ServerResponse,
-  store: RunStore,
-  config: Config,
-  configPath: string | null,
-  cwd: string,
-): Promise<void> {
-  const body = await readJsonBody(req);
-  if (!body) {
-    sendJson(res, 400, { error: "body must be a JSON object" });
-    return;
-  }
-  const script = typeof body.script === "string" && body.script ? body.script : null;
-  const name = typeof body.name === "string" && body.name ? body.name : null;
-  if ((script === null) === (name === null)) {
-    sendJson(res, 400, { error: "provide exactly one of 'script' (inline source) or 'name'" });
-    return;
-  }
-  const checked = checkLaunchInputs(res, config, body);
-  if (!checked) return;
-  // Never hand a known-bad script to a worker: compile first, 400 with the error.
-  if (script) {
-    try {
-      loadWorkflowScript(script, "workflow.js");
-    } catch (err) {
-      sendJson(res, 400, { error: (err as Error).message });
-      return;
-    }
-  }
-  try {
-    const common = {
-      args: body.args,
-      adapter: checked.adapter,
-      source: checked.source,
-      runsRoot: store.root,
-      configPath,
-      origin: "launch",
-    };
-    const { runId } = script
-      ? startRunFromSource(script, common)
-      : startRun(name!, common);
-    sendJson(res, 200, { runId });
-  } catch (err) {
-    const message = (err as Error).message ?? String(err);
-    sendJson(res, /no workflow named/.test(message) ? 404 : 400, { error: message });
-  }
-}
-
-/** POST /api/workflows — save a script into a managed directory (D4: collect). */
-async function postWorkflows(
-  req: IncomingMessage,
-  res: ServerResponse,
-  store: RunStore,
-  config: Config,
-  cwd: string,
-): Promise<void> {
-  const body = await readJsonBody(req);
-  if (!body) {
-    sendJson(res, 400, { error: "body must be a JSON object" });
-    return;
-  }
-  // Accept a user-typed filename ("review.js") as the name "review": the run-by-
-  // name resolver keys on the stem, so saving the extension would create
-  // "review.js.js" that `odw run review` could never find.
-  const rawName = typeof body.name === "string" ? body.name.trim() : "";
-  const name = rawName.replace(/\.(?:js|mjs|cjs)$/i, "");
-  if (!isValidWorkflowName(name)) {
-    sendJson(res, 400, { error: "name must use only letters, digits, '.', '_' or '-'" });
-    return;
-  }
-  // The script content comes inline ('source') or from an existing run's
-  // archived script ('fromRun') — the Save-to-Workspace path, where the browser
-  // has the run id but not the file content.
-  let source = typeof body.source === "string" ? body.source : "";
-  if (!source && typeof body.fromRun === "string" && body.fromRun) {
-    const runId = body.fromRun;
-    if (!RUN_ID.test(runId) || !store.exists(runId)) {
-      sendJson(res, 404, { error: `no such run: ${runId}` });
-      return;
-    }
-    const script = store.readMeta(runId).script as string | undefined;
-    try {
-      source = script ? readFileSync(script, "utf8") : "";
-    } catch {
-      source = "";
-    }
-    if (!source) {
-      sendJson(res, 400, { error: "the run has no readable script to save" });
-      return;
-    }
-  }
-  try {
-    loadWorkflowScript(source, `${name}.js`);
-  } catch (err) {
-    sendJson(res, 400, { error: (err as Error).message });
-    return;
-  }
-  const scope = body.scope === "project" ? "project" : "global";
-  let projectDir = cwd;
-  if (scope === "project" && typeof body.projectDir === "string" && body.projectDir) {
-    try {
-      if (!statSync(body.projectDir).isDirectory()) throw new Error("not a directory");
-    } catch {
-      sendJson(res, 400, { error: `projectDir does not exist: ${body.projectDir}` });
-      return;
-    }
-    projectDir = body.projectDir;
-  }
-  const dir =
-    scope === "project"
-      ? join(projectDir, ".odw", "workflows")
-      : resolveWorkflowsRoot(config.settings.workflowsRoot);
-  const target = join(dir, `${name}.js`);
-  if (existsSync(target)) {
-    sendJson(res, 409, { error: `a workflow named '${name}' already exists at ${target}` });
-    return;
-  }
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(target, source, "utf8");
-  sendJson(res, 200, { path: target });
 }
 
 function openStream(

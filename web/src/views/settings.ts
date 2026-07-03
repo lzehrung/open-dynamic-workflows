@@ -75,7 +75,7 @@ export function renderSettings(settings: SettingsSnapshot | null): string {
     setRow(t("Notify only on failure"), "", toggle(false)) +
     `</div>` +
     `</div>` +
-    `<div class="note-banner"><span style="font-family:var(--mono);color:var(--green-deep);">ⓘ</span> ${t("Runs start from the Launch tab or from your agent via {cmd}. Claude Code runs stay strictly read-only.", { cmd: "<code>odw run &lt;name&gt;</code>" })}</div>` +
+    `<div class="note-banner"><span style="font-family:var(--mono);color:var(--green-deep);">ⓘ</span> ${t("Runs start from your agent via {cmd}. Claude Code runs stay strictly read-only.", { cmd: "<code>odw run &lt;name&gt;</code>" })}</div>` +
     `</div>`
   );
 }

@@ -66,7 +66,7 @@ export interface CreateRunInput {
   inlineSource?: string | null;
   /** Run-level adapter override: the default `agent()` adapter for this run. */
   adapter?: string | null;
-  /** Where the run was initiated from (e.g. "launch" for the GUI flow). */
+  /** Where the run was initiated from (e.g. "chat" for Chat Host runs). */
   origin?: string | null;
 }
 

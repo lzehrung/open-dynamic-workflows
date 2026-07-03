@@ -57,15 +57,15 @@ export interface RunDetail extends RunSummary {
   phaseOrder: string[];
   hasResult: boolean;
   error: { error?: string; stack?: string } | null;
-  /** Where the run was initiated from ("launch" for GUI-launched runs). */
+  /** Where the run was initiated from, when recorded by the launcher. */
   origin: string | null;
-  /** Run-level adapter override recorded at launch, if any. */
+  /** Run-level adapter override recorded at start, if any. */
   adapter: string | null;
   /** The workflow identity recorded at create time (meta.workflowName). */
   workflowName: string | null;
 }
 
-/** One row of GET /api/adapters — the Launch view's agent picker. */
+/** One adapter row exposed in settings snapshots. */
 export interface AdapterListing {
   name: string;
   label: string;
@@ -133,7 +133,7 @@ export interface ChatToolEvent {
 }
 
 export interface ChatToolCall {
-  name: "odw.run" | "odw.generate";
+  name: "odw.run";
   status: ChatToolStatus;
   workflow: string;
   runId: string;

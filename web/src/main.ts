@@ -12,9 +12,8 @@ import { rail, statusbar, toolbar, type Route } from "./shell";
 import { store } from "./store";
 import { renderActivity } from "./views/activity";
 import { renderChat } from "./views/chat";
-import { renderJob, saveForm, type JobTab } from "./views/job";
+import { renderJob, type JobTab } from "./views/job";
 import { renderJobs } from "./views/jobs";
-import { effectiveAdapter, launchForm, prefillLaunch, rememberDir, renderLaunch } from "./views/launch";
 import { renderSettings } from "./views/settings";
 import { orderedWorkflows, renderWorkspace, wfKey } from "./views/workspace";
 import type { WorkflowDetail } from "./types";
@@ -65,9 +64,8 @@ function parseHash(): Route {
     }
     case "settings":
       return { view: "settings", param: null };
-    case "launch":
-      return { view: "launch", param: null };
     default:
+      if (h && view !== "activity") history.replaceState(null, "", "#/activity");
       return { view: "activity", param: null };
   }
 }
@@ -96,8 +94,6 @@ function viewHtml(route: Route): string {
       return renderJob(jobTab, selectedAi);
     case "settings":
       return renderSettings(store.settings);
-    case "launch":
-      return renderLaunch();
   }
 }
 
@@ -110,9 +106,8 @@ function render(): void {
   syncNative(store.runs); // drive Dock badge + native notifications when wrapped
   const chatScroll = captureChatScroll(route);
   // render() is a full innerHTML swap fired on every store emit (SSE pushes,
-  // 1.2s job poll). That destroys any focused text field mid-typing — the Launch
-  // task box and the Save-to-Workspace name input. Capture focus + caret on our
-  // own form fields and restore them after the swap so typing survives a repaint.
+  // 1.2s job poll). Capture focus + caret on our own form fields and restore
+  // them after the swap so typing survives a repaint.
   const focus = captureFocus();
   root.innerHTML =
     `<div class="app">` +
@@ -218,7 +213,7 @@ function restoreChatScroll(snap: ChatScrollSnapshot | null, route: Route): void 
   restoreChatPosition(sessionId, saved);
 }
 
-const FOCUSABLE_IDS = new Set(["lf-task", "lf-source", "lf-adapter", "save-name", "save-scope", "chat-input"]);
+const FOCUSABLE_IDS = new Set(["chat-input"]);
 type FocusSnapshot = { id: string; start: number | null; end: number | null } | null;
 
 function captureFocus(): FocusSnapshot {
@@ -289,9 +284,6 @@ async function enterRoute(): Promise<void> {
     else render();
   } else if (route.view === "jobs") {
     render();
-  } else if (route.view === "launch") {
-    render();
-    if (store.adapters === null) await store.loadAdapters();
   } else if (route.view === "settings") {
     if (store.settings === null) await store.loadSettings();
     render();
@@ -299,12 +291,8 @@ async function enterRoute(): Promise<void> {
     if (store.run?.runId !== route.param) {
       store.clearRun();
       selectedAi = null;
-      saveForm.savedPath = "";
-      saveForm.error = "";
-      saveForm.name = "";
       render();
     }
-    if (store.adapters === null) void store.loadAdapters();
     await store.loadRun(route.param);
     if (jobTab === "result") await store.loadResult(route.param);
     poll = window.setInterval(async () => {
@@ -481,93 +469,12 @@ root.addEventListener("click", (ev) => {
     render();
     return;
   }
-  if (t.closest("[data-generate]") && !launchForm.busy) {
-    void (async () => {
-      launchForm.busy = true;
-      launchForm.error = "";
-      render();
-      try {
-        // effectiveAdapter() is the single source of truth for the picked agent
-        // (the same value the <select> preselects), so a never-touched default
-        // still posts — and it can never be an uninstalled adapter.
-        const adapter = effectiveAdapter();
-        const source = launchForm.source.trim();
-        const body: { task: string; adapter?: string; source?: string } = { task: launchForm.task.trim() };
-        if (adapter) body.adapter = adapter;
-        if (source) body.source = source;
-        const { runId } = await api.generate(body);
-        rememberDir(body.source ?? "");
-        launchForm.busy = false;
-        go(`#/job/${encodeURIComponent(runId)}`);
-      } catch (err) {
-        launchForm.busy = false;
-        launchForm.error = (err as Error).message;
-        render();
-      }
-    })();
-    return;
-  }
   const stopEl = t.closest<HTMLElement>("[data-stop]");
   if (stopEl) {
     void api
       .control(stopEl.dataset.stop!, "stop")
       .then(() => store.loadRun(stopEl.dataset.stop!))
       .catch(() => {});
-    return;
-  }
-  if (t.closest("[data-run-generated]")) {
-    const run = store.run;
-    const gen = store.result as { script?: unknown } | undefined;
-    if (!run || !gen || typeof gen.script !== "string") return;
-    void (async () => {
-      try {
-        const body: { script: string; adapter?: string; source?: string } = { script: gen.script as string };
-        if (run.adapter) body.adapter = run.adapter;
-        if (run.source) body.source = run.source;
-        const { runId } = await api.launchRun(body);
-        go(`#/job/${encodeURIComponent(runId)}`);
-      } catch (err) {
-        alert((err as Error).message);
-      }
-    })();
-    return;
-  }
-  if (t.closest("[data-regenerate]")) {
-    const run = store.run;
-    const args = (run?.args ?? {}) as { task?: unknown };
-    prefillLaunch({
-      task: typeof args.task === "string" ? args.task : "",
-      adapter: run?.adapter ?? "",
-      source: run?.source ?? "",
-    });
-    go("#/launch");
-    return;
-  }
-  if (t.closest("[data-save]") && !saveForm.busy) {
-    const run = store.run;
-    if (!run) return;
-    const nameInput = document.getElementById("save-name") as HTMLInputElement | null;
-    const name = (nameInput?.value ?? saveForm.name ?? "").trim();
-    void (async () => {
-      saveForm.busy = true;
-      saveForm.error = "";
-      render();
-      try {
-        const { path } = await api.saveWorkflow({
-          name,
-          fromRun: run.runId,
-          scope: saveForm.scope,
-          ...(saveForm.scope === "project" && run.source ? { projectDir: run.source } : {}),
-        });
-        saveForm.savedPath = path;
-        // The Workspace list has a new entry now; refresh its cache.
-        void store.loadWorkflows();
-      } catch (err) {
-        saveForm.error = (err as Error).message;
-      }
-      saveForm.busy = false;
-      render();
-    })();
     return;
   }
   const copyEl = t.closest<HTMLElement>("[data-copy]");
@@ -583,14 +490,7 @@ root.addEventListener("click", (ev) => {
 // app), so inputs write through to module state as the user types.
 root.addEventListener("input", (ev) => {
   const el = ev.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
-  if (el.id === "lf-task") launchForm.task = el.value;
-  else if (el.id === "lf-adapter") {
-    launchForm.adapter = el.value;
-    render(); // the permission line tracks the selected adapter
-  } else if (el.id === "lf-source") launchForm.source = el.value;
-  else if (el.id === "save-name") saveForm.name = el.value;
-  else if (el.id === "save-scope") saveForm.scope = el.value === "project" ? "project" : "global";
-  else if (el.id === "chat-input") {
+  if (el.id === "chat-input") {
     chatDraft = el.value;
     if (store.chatError === "Message text is required." && el.value.trim()) {
       store.chatError = "";

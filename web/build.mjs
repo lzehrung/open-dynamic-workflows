@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Build the read-only client SPA into ONE self-contained index.html.
+ * Build the client SPA into ONE self-contained index.html.
  *
  * esbuild (a build-only devDependency of the root package — resolved up the tree)
  * bundles the vanilla-TS app to a single IIFE; the CSS and JS are inlined into

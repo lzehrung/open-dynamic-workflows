@@ -9,7 +9,6 @@
  */
 import { api } from "./api";
 import type {
-  AdapterListing,
   Capabilities,
   ChatSession,
   ChatSessionSummary,
@@ -30,7 +29,6 @@ class Store {
   conn: Connection = "connecting";
   runs: RunSummary[] = [];
   workflows: WorkflowSummary[] | null = null;
-  adapters: AdapterListing[] | null = null;
   settings: SettingsSnapshot | null = null;
   chatSessions: ChatSessionSummary[] | null = null;
   chat: ChatSession | null = null;
@@ -130,18 +128,6 @@ class Store {
       this.emit();
     } catch {
       /* keep the optimistic default; a failed write still surfaces its 409 */
-    }
-  }
-
-  async loadAdapters(): Promise<void> {
-    try {
-      this.adapters = await api.adapters();
-      this.emit();
-    } catch {
-      // Leave a never-loaded list as null (not []) so enterRoute's
-      // `adapters === null` guard retries on the next visit instead of caching a
-      // permanently-empty picker from one transient failure.
-      this.emit();
     }
   }
 
