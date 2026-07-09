@@ -81,7 +81,7 @@ Open Dynamic Workflows (ODW)
 
 **定位**：基于 ODW 套件的**只读窗口**。当前 `dashboard.html` 是单文件 vanilla JS 看板，待升级为数据驱动的 DAG。
 
-**技术选型**：**Tauri**（避开 Electron 双 Node 税、避开 SwiftUI 与 Web 渲染器分叉）。运行时永远纯 Node 零依赖；Rust 只在客户端构建里，webview 与未改动的 localhost server（`odw serve`）对话。前端经 `scripts/embed-dashboard.mjs` 产出**唯一一份 bundle**，内嵌二进制与原生外壳**同 hash 消费**——CI 断言零渲染代码分叉。
+**技术选型（2026-07-09 更新）**：客户端形态收敛为**纯 Web**——`odw serve` 的浏览器看板是唯一客户端；此前的 Tauri 原生外壳（`apps/desktop`）已退役删除。运行时永远纯 Node 零依赖；前端经 `scripts/embed-dashboard.mjs` 产出**唯一一份 bundle**，由内嵌二进制直接服务。
 
 **需运行时先行暴露的（小）契约**：拓扑事件（`agent/parallel/pipeline` 在 `AGENT_STARTED` 上发可选 `groupId/kind/index`，`RunDetail` 派生 groups 树，向后兼容，旧 events.jsonl 仍可折叠）+ SSE `/api/stream?since=` 增量。
 
@@ -117,7 +117,7 @@ Open Dynamic Workflows (ODW)
 3. **客户端 Web 版**：Workspace + Jobs，先在浏览器把 DAG 体验跑通。
 4. **退出码保证 + OS-cron 配方**——让运行可被定时触发并判定成败（与 1–3 相对独立）。
 5. **运行层补强**：消除沉默 no-op + 预算硬上限钩子 + 双兼容 CI 审计 + SKILL.md 复核（持续）。
-6. **Tauri 原生外壳**：DAG 体验验证通过后，套上原生壳，消费第 3 步同一 bundle。
+6. ~~**Tauri 原生外壳**~~（2026-07-09 取消：桌面外壳已退役，Web 看板是唯一客户端，不再套原生壳）。
 
 ---
 

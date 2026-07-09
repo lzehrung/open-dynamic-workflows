@@ -107,11 +107,6 @@ const ZH: Record<string, string> = {
   "Workflow directories": "工作流目录",
   Language: "语言",
   "switch the interface language": "切换界面语言",
-  "Launch at login": "开机时启动",
-  "keep watching runs in the background": "在后台持续监视运行",
-  "Dock badge — active run count": "程序坞角标 — 进行中的运行数",
-  "Native notification on run finish / fail": "运行完成 / 失败时发送系统通知",
-  "Notify only on failure": "仅在失败时通知",
   "This build is read-only. To start a run, your agent uses {cmd} — there is no run button by design.":
     "此版本为只读。要启动运行，你的智能体使用 {cmd}——此处刻意不设运行按钮。",
 
@@ -279,17 +274,9 @@ const ZH: Record<string, string> = {
   Today: "今天",
   Yesterday: "昨天",
 
-  // Native notifications (built in the web layer, shown by the Tauri shell).
-  "{name} failed": "{name} 运行失败",
-  "{failed} of {agents} agents failed": "{agents} 个智能体中 {failed} 个失败",
-  "{name} stopped": "{name} 已停止",
-  "Run was stopped": "运行已停止",
-  "{name} finished": "{name} 已完成",
-  "{agents} agents": "{agents} 个智能体",
   // Run affordances.
   "⏹ Stop": "⏹ 停止",
   "Read-only dashboard": "只读看板",
-  "This dashboard is served off-loopback, so it can only observe. Start runs from the local app or the CLI.": "此看板绑定在非回环地址，只能观测。请用本地 App 或 CLI 发起运行。",
   "Have your agent start one with the CLI.": "让你的 agent 用 CLI 发起一个运行。",
   "Have your agent write one into the managed directories.": "让你的 agent 写入受管目录。",
   "Runs start from your agent via {cmd}. Claude Code runs stay strictly read-only.":

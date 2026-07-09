@@ -18,7 +18,6 @@ import { renderSettings } from "./views/settings";
 import { orderedWorkflows, renderWorkspace, wfKey } from "./views/workspace";
 import type { WorkflowDetail } from "./types";
 import { api } from "./api";
-import { syncNative, isNative } from "./native";
 import { getLang, setLang, t as tr, type Lang } from "./i18n";
 
 /** Reflect the chosen language on <html lang> (a11y + correct CJK shaping). */
@@ -103,7 +102,6 @@ function render(): void {
     return;
   }
   const route = currentRoute();
-  syncNative(store.runs); // drive Dock badge + native notifications when wrapped
   const chatScroll = captureChatScroll(route);
   // render() is a full innerHTML swap fired on every store emit (SSE pushes,
   // 1.2s job poll). Capture focus + caret on our own form fields and restore
@@ -544,9 +542,6 @@ store.subscribe(render);
 // stream, so a headless capture's virtual clock can settle (an open stream keeps
 // the network "busy" forever). Harmless in normal use — no one passes it.
 const snap = new URLSearchParams(location.search).get("snap") === "1";
-// In the Tauri shell the OS draws real traffic lights (Overlay titlebar), so drop
-// our decorative ones and inset the toolbar to clear them (see .is-native in CSS).
-document.body.classList.toggle("is-native", isNative());
 applyDocLang();
 if (!location.hash) location.hash = "#/activity";
 if (!snap) store.connect();

@@ -18,9 +18,6 @@ function setRow(title: string, sub: string, control: string): string {
   );
 }
 
-function toggle(on: boolean): string {
-  return `<span class="toggle ${on ? "" : "off"}"><i></i></span>`;
-}
 
 /** Segmented EN / 中文 switch. Click handling lives in main.ts (`[data-lang]`). */
 function langControl(): string {
@@ -69,10 +66,6 @@ export function renderSettings(settings: SettingsSnapshot | null): string {
     (roots || `<div class="empty" style="position:static;min-height:120px;">${t("Loading settings...")}</div>`) +
     `<div class="section-label" style="margin:22px 0 6px;">${t("App")}</div>` +
     setRow(t("Language"), t("switch the interface language"), langControl()) +
-    setRow(t("Launch at login"), t("keep watching runs in the background"), toggle(true)) +
-    setRow(t("Dock badge — active run count"), "", toggle(true)) +
-    setRow(t("Native notification on run finish / fail"), "", toggle(true)) +
-    setRow(t("Notify only on failure"), "", toggle(false)) +
     `</div>` +
     `</div>` +
     `<div class="note-banner"><span style="font-family:var(--mono);color:var(--green-deep);">ⓘ</span> ${t("Runs start from your agent via {cmd}. Claude Code runs stay strictly read-only.", { cmd: "<code>odw run &lt;name&gt;</code>" })}</div>` +
