@@ -7,7 +7,6 @@ const stroke = (d: string) =>
 
 export const icons = {
   chat: stroke(`<path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/><path d="M8 9h8M8 13h5"/>`),
-  launch: stroke(`<path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/>`),
   activity: stroke(`<path d="M3 12h4l2-7 4 14 2-7h6"/>`),
   workspace: stroke(`<path d="M4 6h16M4 12h16M4 18h16"/>`),
   jobs: stroke(

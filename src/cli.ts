@@ -25,7 +25,6 @@ import { loadConfig, resolveRunsRoot } from "./adapters/config.js";
 import type { WorkflowEvent } from "./events.js";
 import { VERSION } from "./index.js";
 import { startRun, startRunFromSource, waitFor } from "./runtime/launcher.js";
-import { recoverLoginPath } from "./runtime/login-path.js";
 import { RunStore, TERMINAL_STATES } from "./runtime/run-store.js";
 import { startServer } from "./runtime/server.js";
 import { executeRun } from "./runtime/worker.js";
@@ -369,20 +368,6 @@ async function cmdServe(rest: string[]): Promise<number> {
       open: { type: "boolean" },
     },
   });
-
-  // A desktop-app launch reaches us with launchd's stripped PATH; recover the
-  // login shell's real PATH (no-op for a terminal launch) BEFORE any adapter is
-  // detected or a worker is spawned, so both find the agent CLIs. A one-line
-  // breadcrumb on the GUI path (the sidecar drains stderr to its log) makes the
-  // "works in terminal, not in the app" report diagnosable.
-  const recovery = recoverLoginPath();
-  if (recovery.outcome === "recovered") {
-    process.stderr.write(`odw serve: recovered ${recovery.added.length} PATH dir(s) from the login shell\n`);
-  } else if (recovery.outcome === "failed") {
-    process.stderr.write(
-      "odw serve: could not recover the login shell PATH — agent CLIs installed outside the launch PATH may read as 'not installed'\n",
-    );
-  }
 
   const port = values.port === undefined ? 4317 : Number(values.port);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {

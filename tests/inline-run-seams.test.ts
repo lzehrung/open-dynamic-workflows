@@ -12,7 +12,7 @@ import { startRun, startRunFromSource, waitFor } from "../src/runtime/launcher.j
 import { RunStore } from "../src/runtime/run-store.js";
 import { executeRun } from "../src/runtime/worker.js";
 
-// The three launch-layer engine seams (docs/tasks/launch.md §3.3):
+// Engine seams that support inline workflow execution:
 //   (a) validate(source) — compile-check a candidate workflow from inside a workflow
 //   (b) run-level adapter override — meta.adapter as the run's default agent() adapter
 //   (c) startRunFromSource — inline source archived as workflow.js inside the run dir
@@ -172,13 +172,13 @@ test("startRunFromSource archives the script in the run dir and runs it", async 
       source: root,
       runsRoot: join(root, "runs"),
       args: { n: 21 },
-      origin: "launch",
+      origin: "inline-test",
     });
     const meta = store.readMeta(runId);
     const archived = join(store.runDir(runId), "workflow.js");
     assert.equal(meta.script, archived, "meta.script points inside the run dir");
     assert.equal(readFileSync(archived, "utf8"), source, "source archived verbatim");
-    assert.equal(meta.origin, "launch");
+    assert.equal(meta.origin, "inline-test");
     assert.equal(meta.workflowName, "inline-wf");
     const status = await waitFor(store, runId, { timeoutMs: 10000 });
     assert.equal(status.state, "done");

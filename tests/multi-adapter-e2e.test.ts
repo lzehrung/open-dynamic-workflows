@@ -92,7 +92,7 @@ test("two distinct adapters drive a converging duel workflow end to end", async 
 });
 
 test("a generated workflow can immediately drive multiple adapters (generate → run chain)", async () => {
-  // The launch-layer chain with the engine only: a generation result (script
+  // Engine-only chain: a generation result (script
   // text) goes straight into startRun-style execution with per-role adapters.
   const root = mkdtempSync(join(tmpdir(), "odw-duel-"));
   try {

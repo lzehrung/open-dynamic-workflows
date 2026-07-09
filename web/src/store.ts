@@ -9,11 +9,13 @@
  */
 import { api } from "./api";
 import type {
-  AdapterListing,
   Capabilities,
+  ChatSession,
+  ChatSessionSummary,
   Connection,
   RunDetail,
   RunSummary,
+  SettingsSnapshot,
   WorkflowEvent,
   WorkflowSummary,
 } from "./types";
@@ -27,7 +29,13 @@ class Store {
   conn: Connection = "connecting";
   runs: RunSummary[] = [];
   workflows: WorkflowSummary[] | null = null;
-  adapters: AdapterListing[] | null = null;
+  settings: SettingsSnapshot | null = null;
+  chatSessions: ChatSessionSummary[] | null = null;
+  chat: ChatSession | null = null;
+  chatMissingId: string | null = null;
+  chatError = "";
+  chatSending = false;
+  chatCreating = false;
   // Default writable = true (the loopback common case) until the probe answers,
   // so local use never flashes a read-only UI on first paint.
   capabilities: Capabilities = { writable: true };
@@ -65,6 +73,19 @@ class Store {
         this.conn = "live";
         this.backoff = 1000;
         this.emit();
+      });
+      es.addEventListener("chat", (e) => {
+        let sessionId: string | null = null;
+        try {
+          const payload = JSON.parse((e as MessageEvent).data) as { sessionId?: unknown };
+          sessionId = typeof payload.sessionId === "string" ? payload.sessionId : null;
+        } catch {
+          sessionId = null;
+        }
+        void this.loadChatSessions();
+        if (sessionId && (this.chat?.id === sessionId || this.chatMissingId === sessionId)) {
+          void this.loadChatSession(sessionId);
+        }
       });
       es.onerror = () => {
         this.conn = "reconnecting";
@@ -110,15 +131,90 @@ class Store {
     }
   }
 
-  async loadAdapters(): Promise<void> {
+  async loadSettings(): Promise<void> {
     try {
-      this.adapters = await api.adapters();
+      this.settings = await api.settings();
       this.emit();
     } catch {
-      // Leave a never-loaded list as null (not []) so enterRoute's
-      // `adapters === null` guard retries on the next visit instead of caching a
-      // permanently-empty picker from one transient failure.
       this.emit();
+    }
+  }
+
+  async loadChatSessions(): Promise<void> {
+    try {
+      this.chatSessions = await api.chatSessions();
+      this.emit();
+    } catch (err) {
+      this.chatSessions = this.chatSessions ?? [];
+      this.chatError = (err as Error).message;
+      this.emit();
+    }
+  }
+
+  async loadChatSession(id: string): Promise<void> {
+    try {
+      this.chat = await api.chatSession(id);
+      this.chatMissingId = null;
+      this.chatError = "";
+      this.emit();
+    } catch (err) {
+      this.chat = null;
+      this.chatMissingId = id;
+      this.chatError = (err as Error).message;
+      this.emit();
+    }
+  }
+
+  async createChatSession(source?: string): Promise<ChatSession | null> {
+    this.chatCreating = true;
+    this.chatError = "";
+    this.emit();
+    try {
+      this.chat = await api.createChatSession(source ? { source } : {});
+      this.chatMissingId = null;
+      await this.loadChatSessions();
+      return this.chat;
+    } catch (err) {
+      this.chatError = (err as Error).message;
+      this.emit();
+      return null;
+    } finally {
+      this.chatCreating = false;
+      this.emit();
+    }
+  }
+
+  async sendChatMessage(id: string, text: string): Promise<ChatSession | null> {
+    this.chatSending = true;
+    this.chatError = "";
+    this.emit();
+    try {
+      this.chat = await api.sendChatMessage(id, { text });
+      this.chatMissingId = null;
+      await this.loadChatSessions();
+      return this.chat;
+    } catch (err) {
+      this.chatError = (err as Error).message;
+      this.emit();
+      return null;
+    } finally {
+      this.chatSending = false;
+      this.emit();
+    }
+  }
+
+  async deleteChatSession(id: string): Promise<boolean> {
+    this.chatError = "";
+    try {
+      await api.deleteChatSession(id);
+      if (this.chat?.id === id) this.chat = null;
+      if (this.chatMissingId === id) this.chatMissingId = null;
+      await this.loadChatSessions();
+      return true;
+    } catch (err) {
+      this.chatError = (err as Error).message;
+      this.emit();
+      return false;
     }
   }
 

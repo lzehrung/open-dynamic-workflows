@@ -1,15 +1,17 @@
 /**
  * Typed client for the `odw serve` API.
  *
- * Reads are unconditional; writes exist since the launch layer (generate / run /
- * save / control) and are loopback-only on the server side. Claude-provider
- * runs remain strictly read-only — the server refuses control for them.
+ * Reads are unconditional; chat writes and run control are loopback-only on the
+ * server side. Claude-provider runs remain strictly read-only — the server
+ * refuses control for them.
  */
 import type {
-  AdapterListing,
   Capabilities,
+  ChatSession,
+  ChatSessionSummary,
   RunDetail,
   RunSummary,
+  SettingsSnapshot,
   WorkflowDetail,
   WorkflowEvent,
   WorkflowSummary,
@@ -17,8 +19,9 @@ import type {
 
 async function getJSON<T>(url: string): Promise<T> {
   const r = await fetch(url, { headers: { accept: "application/json" } });
-  if (!r.ok) throw new Error(`${url} → ${r.status}`);
-  return (await r.json()) as T;
+  const payload = (await r.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!r.ok) throw new Error(String(payload.error ?? `${url} → ${r.status}`));
+  return payload as T;
 }
 
 /** POST JSON; throws with the server's error message so forms can show it. */
@@ -27,6 +30,17 @@ async function postJSON<T>(url: string, body: unknown): Promise<T> {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json" },
     body: JSON.stringify(body),
+  });
+  const payload = (await r.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!r.ok) throw new Error(String(payload.error ?? `${url} → ${r.status}`));
+  return payload as T;
+}
+
+async function deleteJSON<T>(url: string): Promise<T> {
+  const r = await fetch(url, {
+    method: "DELETE",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: "{}",
   });
   const payload = (await r.json().catch(() => ({}))) as Record<string, unknown>;
   if (!r.ok) throw new Error(String(payload.error ?? `${url} → ${r.status}`));
@@ -44,21 +58,16 @@ export const api = {
   workflows: () => getJSON<WorkflowSummary[]>("/api/workflows"),
   workflow: (name: string, provider?: string) =>
     getJSON<WorkflowDetail>(`/api/workflows/${enc(name)}${provider ? `?provider=${enc(provider)}` : ""}`),
-  adapters: () => getJSON<AdapterListing[]>("/api/adapters"),
   capabilities: () => getJSON<Capabilities>("/api/capabilities"),
+  settings: () => getJSON<SettingsSnapshot>("/api/settings"),
+  chatSessions: () => getJSON<ChatSessionSummary[]>("/api/chat/sessions"),
+  chatSession: (id: string) => getJSON<ChatSession>(`/api/chat/sessions/${enc(id)}`),
 
-  // --- launch-layer writes ---
-  generate: (body: { task: string; adapter?: string; source?: string }) =>
-    postJSON<{ runId: string }>("/api/generate", body),
-  launchRun: (body: { script?: string; name?: string; args?: unknown; adapter?: string; source?: string }) =>
-    postJSON<{ runId: string }>("/api/runs", body),
-  saveWorkflow: (body: {
-    name: string;
-    source?: string;
-    fromRun?: string;
-    scope: "global" | "project";
-    projectDir?: string;
-  }) => postJSON<{ path: string }>("/api/workflows", body),
+  // --- local writes ---
+  createChatSession: (body: { source?: string } = {}) => postJSON<ChatSession>("/api/chat/sessions", body),
+  sendChatMessage: (id: string, body: { text: string; adapter?: string; source?: string }) =>
+    postJSON<ChatSession>(`/api/chat/sessions/${enc(id)}/messages`, body),
+  deleteChatSession: (id: string) => deleteJSON<{ ok: true }>(`/api/chat/sessions/${enc(id)}`),
   control: (id: string, action: "pause" | "resume" | "stop") =>
     postJSON<{ ok: boolean }>(`/api/runs/${enc(id)}/control`, { action }),
 };

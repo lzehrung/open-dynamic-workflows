@@ -90,7 +90,7 @@ export interface RunDetail extends RunSummary {
   phaseOrder: string[];
   hasResult: boolean;
   error: { error?: string; stack?: string } | null;
-  /** Where the run was initiated from (meta.origin, e.g. "launch"); null for CLI runs. */
+  /** Where the run was initiated from (meta.origin, e.g. "chat"); null for CLI runs. */
   origin: string | null;
   /** Run-level adapter override recorded at launch (meta.adapter), if any. */
   adapter: string | null;
