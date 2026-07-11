@@ -224,8 +224,8 @@ odw pause|resume|stop $RUN
 odw list
 ```
 
-`--fg` / `-d, --detach` / `--wait`(静默阻塞到结束并打印结果)可显式指定模式;
-环境变量 `ODW_DETACH=1` 强制后台。
+`--fg` / `-d, --detach` / `--wait`(阻塞到结束并打印结果,stderr 仅一行 run id
+提示)可显式指定模式;环境变量 `ODW_DETACH=1` 强制后台。
 
 一次运行在独立的 detached worker 进程里执行,并把一切持久化到一个 run 目录——所以它能
 比启动它的命令活得更久,也能从任何地方被观测。

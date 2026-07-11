@@ -80,7 +80,7 @@ export function helpText(): string {
     "  --adapter <name>    default agent() adapter for this run (explicit agent(p,{adapter}) still wins)",
     "  --fg                run in the foreground: live progress on a TTY, plain event lines otherwise",
     "  -d, --detach        start in the background and print the run id",
-    "  --wait              block silently until the run finishes, then print the result",
+    "  --wait              block until the run finishes, then print the result (one run-id line on stderr)",
     "  --timeout <s>       with --fg/--wait/attach: give up after s seconds, exit 124 (run continues)",
     "  --budget <tokens>   token target exposed to the script as budget.total",
     "",

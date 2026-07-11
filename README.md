@@ -239,8 +239,9 @@ odw pause|resume|stop $RUN
 odw list
 ```
 
-`--fg` / `-d, --detach` / `--wait` (block silently, print the result) force a
-mode explicitly; `ODW_DETACH=1` forces background from the environment.
+`--fg` / `-d, --detach` / `--wait` (block, then print the result; a single
+run-id line on stderr) force a mode explicitly; `ODW_DETACH=1` forces
+background from the environment.
 
 A run executes in a detached worker process and persists everything to a run
 directory, so it outlives the command that started it and can be observed from
