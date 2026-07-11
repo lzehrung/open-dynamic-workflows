@@ -22,9 +22,9 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 import { loadConfig, resolveRunsRoot } from "./adapters/config.js";
-import type { WorkflowEvent } from "./events.js";
 import { VERSION } from "./index.js";
 import { startRun, startRunFromSource, waitFor } from "./runtime/launcher.js";
+import { attachRun, formatEvent, resolveRunMode, type RunMode } from "./runtime/live-view.js";
 import { RunStore, TERMINAL_STATES } from "./runtime/run-store.js";
 import { startServer } from "./runtime/server.js";
 import { executeRun } from "./runtime/worker.js";
@@ -59,7 +59,8 @@ export function helpText(): string {
     "Run Claude Code-format dynamic-workflow scripts against any coding-agent CLI.",
     "",
     "Usage:",
-    "  odw run <script.js|name> [--args JSON|@file] [--wait]  start a workflow (background)",
+    "  odw run <script.js|name> [--args JSON|@file]       start a workflow (see modes below)",
+    "  odw attach <run_id>                                attach the live foreground view to a run",
     "  odw rerun <run_id>                                 start a fresh run with the same inputs",
     "  odw status <run_id>                                show a run's current state",
     "  odw logs <run_id|--workflow name> [--follow]       print a run's progress events",
@@ -76,9 +77,16 @@ export function helpText(): string {
     "  --runs-root <dir>   directory runs are stored under",
     "  --source <dir>      run's working dir; also anchors a relative script path & project-name lookup",
     "  --adapter <name>    default agent() adapter for this run (explicit agent(p,{adapter}) still wins)",
-    "  --wait              block until the run finishes and print the result",
-    "  --timeout <s>       with --wait: stop waiting after s seconds (the run itself continues)",
+    "  --fg                run in the foreground: live progress on a TTY, plain event lines otherwise",
+    "  -d, --detach        start in the background and print the run id",
+    "  --wait              block silently until the run finishes, then print the result",
+    "  --timeout <s>       with --fg/--wait/attach: give up after s seconds, exit 124 (run continues)",
     "  --budget <tokens>   token target exposed to the script as budget.total",
+    "",
+    "Run modes (odw run / rerun):",
+    "  interactive terminal        attaches in the foreground (Ctrl-C detaches; the run keeps going)",
+    "  piped / captured / CI       detaches and prints the run id — `RUN=$(odw run wf.js)` stays correct",
+    "  ODW_DETACH=1                forces detach; explicit --fg/--wait/--detach always win",
     "  --port <n>          dashboard port (serve; default 4317)",
     "  --host <addr>       dashboard bind address (serve; default 127.0.0.1)",
     "  --open              open the dashboard in the default browser (serve)",
@@ -108,8 +116,10 @@ export async function main(argv: string[]): Promise<number> {
         return await cmdWorker(rest);
       case "run":
         return await cmdRun(rest);
+      case "attach":
+        return await cmdAttach(rest);
       case "rerun":
-        return cmdRerun(rest);
+        return await cmdRerun(rest);
       case "status":
         return cmdStatus(rest);
       case "result":
@@ -162,6 +172,8 @@ async function cmdRun(rest: string[]): Promise<number> {
       source: { type: "string" },
       adapter: { type: "string" },
       wait: { type: "boolean" },
+      fg: { type: "boolean" },
+      detach: { type: "boolean", short: "d" },
       timeout: { type: "string" },
       budget: { type: "string" },
     },
@@ -191,6 +203,22 @@ async function cmdRun(rest: string[]): Promise<number> {
     timeoutMs = seconds * 1000;
   }
 
+  const resolved = resolveRunMode(
+    { fg: values.fg === true, detach: values.detach === true, wait: values.wait === true },
+    { stdoutTTY: process.stdout.isTTY === true, stderrTTY: process.stderr.isTTY === true },
+    process.env,
+  );
+  if ("usageError" in resolved) {
+    process.stderr.write(`odw run: ${resolved.usageError}\n`);
+    return 2;
+  }
+  if (values.timeout !== undefined && resolved.mode === "detach") {
+    process.stderr.write(
+      "odw run: --timeout needs --wait or --fg (a detached start returns immediately)\n",
+    );
+    return 2;
+  }
+
   const { runId, store } = startRun(ref, {
     args: parseArgsValue(values.args),
     configPath: values.config ?? null,
@@ -200,15 +228,77 @@ async function cmdRun(rest: string[]): Promise<number> {
     budgetTotal,
   });
 
-  if (!values.wait) {
+  return afterStart(store, runId, resolved.mode, { timeoutMs, hint: "started run" });
+}
+
+/**
+ * What run/rerun do once the detached worker is spawned, per the resolved mode.
+ * The run itself is identical in all three: only the viewer differs.
+ */
+async function afterStart(
+  store: RunStore,
+  runId: string,
+  mode: RunMode,
+  opts: { timeoutMs?: number; hint: string },
+): Promise<number> {
+  if (mode === "detach") {
     process.stdout.write(runId + "\n");
-    process.stderr.write(`started run ${runId} (use 'odw status ${runId}')\n`);
+    process.stderr.write(`${opts.hint} ${runId} (use 'odw status ${runId}')\n`);
     return 0;
   }
+  if (mode === "wait") {
+    process.stderr.write(`running ${runId} ...\n`);
+    const status = await waitFor(store, runId, { timeoutMs: opts.timeoutMs });
+    if (!TERMINAL_STATES.has(String(status.state))) {
+      process.stderr.write(
+        `timed out waiting for ${runId} — run continues (odw attach ${runId})\n`,
+      );
+      return 124;
+    }
+    return reportTerminal(store, runId, status);
+  }
+  return attachRun(store, runId, {
+    out: process.stdout,
+    err: process.stderr,
+    timeoutMs: opts.timeoutMs,
+  });
+}
 
-  process.stderr.write(`running ${runId} ...\n`);
-  const status = await waitFor(store, runId, { timeoutMs });
-  return reportTerminal(store, runId, status);
+/** `odw attach <run_id>` — (re)attach the foreground view to an existing run. */
+async function cmdAttach(rest: string[]): Promise<number> {
+  const { values, positionals } = parseArgs({
+    args: rest,
+    allowPositionals: true,
+    options: {
+      config: { type: "string" },
+      "runs-root": { type: "string" },
+      timeout: { type: "string" },
+    },
+  });
+  const runId = positionals[0];
+  if (!runId) {
+    process.stderr.write("odw attach: missing <run_id>\n");
+    return 2;
+  }
+  const store = storeFrom(values);
+  if (!store.exists(runId)) {
+    process.stderr.write(`no such run: ${runId}\n`);
+    return 1;
+  }
+  let timeoutMs: number | undefined;
+  if (values.timeout !== undefined) {
+    const seconds = Number(values.timeout);
+    if (!Number.isFinite(seconds) || seconds < 0) {
+      process.stderr.write("odw attach: --timeout must be a non-negative number of seconds\n");
+      return 2;
+    }
+    timeoutMs = seconds * 1000;
+  }
+  return attachRun(store, runId, {
+    out: process.stdout,
+    err: process.stderr,
+    timeoutMs,
+  });
 }
 
 function cmdStatus(rest: string[]): number {
@@ -304,16 +394,47 @@ function cmdList(rest: string[]): number {
 }
 
 /** `odw rerun <run_id>` — start a fresh run with the same inputs as an existing one. */
-function cmdRerun(rest: string[]): number {
+async function cmdRerun(rest: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args: rest,
     allowPositionals: true,
-    options: { config: { type: "string" }, "runs-root": { type: "string" } },
+    options: {
+      config: { type: "string" },
+      "runs-root": { type: "string" },
+      wait: { type: "boolean" },
+      fg: { type: "boolean" },
+      detach: { type: "boolean", short: "d" },
+      timeout: { type: "string" },
+    },
   });
   const runId = positionals[0];
   if (!runId) {
     process.stderr.write("odw rerun: missing <run_id>\n");
     return 2;
+  }
+  const resolved = resolveRunMode(
+    { fg: values.fg === true, detach: values.detach === true, wait: values.wait === true },
+    { stdoutTTY: process.stdout.isTTY === true, stderrTTY: process.stderr.isTTY === true },
+    process.env,
+  );
+  if ("usageError" in resolved) {
+    process.stderr.write(`odw rerun: ${resolved.usageError}\n`);
+    return 2;
+  }
+  if (values.timeout !== undefined && resolved.mode === "detach") {
+    process.stderr.write(
+      "odw rerun: --timeout needs --wait or --fg (a detached start returns immediately)\n",
+    );
+    return 2;
+  }
+  let timeoutMs: number | undefined;
+  if (values.timeout !== undefined) {
+    const seconds = Number(values.timeout);
+    if (!Number.isFinite(seconds) || seconds < 0) {
+      process.stderr.write("odw rerun: --timeout must be a non-negative number of seconds\n");
+      return 2;
+    }
+    timeoutMs = seconds * 1000;
   }
   const store = storeFrom(values);
   if (!store.exists(runId)) {
@@ -351,9 +472,10 @@ function cmdRerun(rest: string[]): number {
   } else {
     newId = startRun(script, opts).runId;
   }
-  process.stdout.write(newId + "\n");
-  process.stderr.write(`re-running ${runId} as ${newId} (use 'odw status ${newId}')\n`);
-  return 0;
+  return afterStart(store, newId, resolved.mode, {
+    timeoutMs,
+    hint: `re-running ${runId} as`,
+  });
 }
 
 async function cmdServe(rest: string[]): Promise<number> {
@@ -571,20 +693,6 @@ export function parseArgsValue(raw?: string): unknown {
     }
     return text; // a plain string that isn't JSON, e.g. --args hello
   }
-}
-
-function formatEvent(ev: WorkflowEvent): string {
-  const stamp = new Date(((ev.ts as number) ?? 0) * 1000).toLocaleTimeString();
-  const type = String(ev.type ?? "?");
-  const phase = ev.phase ? ` (${String(ev.phase)})` : "";
-  let detail = "";
-  if (type === "log") detail = String(ev.message ?? "");
-  else if (type === "phase_started") detail = `phase: ${String(ev.phase ?? "")}`;
-  else if (type.startsWith("agent_")) {
-    detail = String(ev.label ?? "agent");
-    if (type === "agent_failed") detail += ` — ${String(ev.error ?? "")}`;
-  } else detail = String(ev.error ?? ev.runId ?? "");
-  return `[${stamp}] ${type.padEnd(15)}${phase} ${detail}`.trimEnd();
 }
 
 function baseName(path: string | undefined): string {

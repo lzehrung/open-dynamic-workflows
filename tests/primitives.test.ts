@@ -29,6 +29,7 @@ function fakeContext(
     source: process.cwd(),
     budgetTotal: null,
     usage: { outputChars: 0 },
+    seq: { value: 0 },
     currentPhase: null,
     emit(ev) {
       sink.emit(ev);

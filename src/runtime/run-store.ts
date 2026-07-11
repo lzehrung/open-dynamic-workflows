@@ -27,10 +27,14 @@
 
 import {
   appendFileSync,
+  closeSync,
   existsSync,
+  fstatSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
+  readSync,
   renameSync,
   writeFileSync,
 } from "node:fs";
@@ -186,6 +190,51 @@ export class RunStore {
       }
     }
     return out;
+  }
+
+  /**
+   * Incremental read for live observers: return the events appended since
+   * `cursor` and the cursor to pass next time. The cursor only ever advances to
+   * a byte offset just past a complete `\n`-terminated line, so a torn tail
+   * (mid-append) is simply left for the next poll and a multi-byte character
+   * can never be split. A file smaller than the cursor (replaced/truncated)
+   * resets the cursor to 0 — the observer re-sees the stream from the start
+   * rather than waiting forever on an offset that no longer exists.
+   */
+  readEventsSince(
+    runId: string,
+    cursor: { offset: number },
+  ): { events: WorkflowEvent[]; cursor: { offset: number } } {
+    const path = this.eventsPath(runId);
+    let fd: number;
+    try {
+      fd = openSync(path, "r");
+    } catch {
+      return { events: [], cursor }; // not written yet (or transiently unreadable)
+    }
+    try {
+      const size = fstatSync(fd).size;
+      const offset = size < cursor.offset ? 0 : cursor.offset;
+      if (size === offset) return { events: [], cursor: { offset } };
+      const buf = Buffer.alloc(size - offset);
+      const read = readSync(fd, buf, 0, buf.length, offset);
+      const chunk = buf.subarray(0, read);
+      const lastNl = chunk.lastIndexOf(0x0a);
+      if (lastNl === -1) return { events: [], cursor: { offset } }; // torn tail only
+      const events: WorkflowEvent[] = [];
+      for (const line of chunk.subarray(0, lastNl + 1).toString("utf8").split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          events.push(JSON.parse(trimmed) as WorkflowEvent);
+        } catch {
+          // Complete but unparsable line — skip it, same tolerance as readEvents.
+        }
+      }
+      return { events, cursor: { offset: offset + lastNl + 1 } };
+    } finally {
+      closeSync(fd);
+    }
   }
 
   // --- result & error --------------------------------------------------------

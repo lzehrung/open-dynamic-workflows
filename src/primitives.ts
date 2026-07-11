@@ -94,6 +94,10 @@ export function createPrimitives(
 
   const agent = async (prompt: string, opts: AgentOptions = {}): Promise<unknown> => {
     const activePhase = opts.phase !== undefined ? opts.phase : ctx.currentPhase;
+    // Stable per-dispatch identity. Events for THIS dispatch all carry it, so
+    // observers pair started/finished exactly even when several concurrent
+    // agents share a label+phase (the pre-agentId pairing was heuristic).
+    const agentId = ++ctx.seq.value;
     // Adapter selection honours ONLY opts.adapter. agentType is a persona (it is
     // forwarded to the bridge and injected into the prompt), never an adapter name.
     const display =
@@ -114,6 +118,7 @@ export function createPrimitives(
         // dispatch slot, so queued work is not presented as running.
         ctx.emit(
           event(AGENT_STARTED, {
+            agentId,
             label: display,
             phase: activePhase,
             adapter: opts.adapter ?? ctx.config.settings.defaultAdapter ?? null,
@@ -123,7 +128,7 @@ export function createPrimitives(
       });
     } catch (err) {
       if (isFatalError(err)) throw err; // budget exhausted / stop: abort the run
-      ctx.emit(event(AGENT_FAILED, { label: display, phase: activePhase, error: String(err) }));
+      ctx.emit(event(AGENT_FAILED, { agentId, label: display, phase: activePhase, error: String(err) }));
       throw err;
     }
     // No option is dropped silently: surface each routing note as a LOG event
@@ -133,6 +138,7 @@ export function createPrimitives(
     }
     ctx.emit(
       event(AGENT_FINISHED, {
+        agentId,
         label: display,
         phase: activePhase,
         adapter: outcome.adapter,

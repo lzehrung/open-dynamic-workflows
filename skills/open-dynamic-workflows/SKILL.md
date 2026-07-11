@@ -107,6 +107,12 @@ odw pause $RUN / resume $RUN / stop $RUN
 odw list                    # all runs
 ```
 
+Both patterns above behave exactly like this for you: your shell is not a
+terminal, so `odw run` detaches and prints the run id. Only a bare invocation
+in a human's interactive terminal attaches a live progress view instead
+(Ctrl-C there detaches; the run keeps going; `odw attach <run_id>` re-attaches).
+Force either way with `-d`/`--detach` or `--fg`, or `ODW_DETACH=1`.
+
 Saved workflows run by name (`odw run <name>`); lookup order:
 `.odw/workflows`, `.claude/workflows`, `~/.odw/workflows`,
 `~/.claude/workflows`.

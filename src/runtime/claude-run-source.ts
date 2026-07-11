@@ -201,6 +201,7 @@ export class ClaudeRunSource implements RunSource {
       const startedAt = num(a.startedAt) != null ? num(a.startedAt)! / 1000 : null;
       const durationMs = num(a.durationMs);
       return {
+        agentId: null, // Claude transcripts use their own string ids, not ODW dispatch ids
         label: String(a.label ?? a.agentId ?? "agent"),
         phase: a.phaseTitle != null ? String(a.phaseTitle) : null,
         state: mapAgentState(a.state),
@@ -276,6 +277,7 @@ export class ClaudeRunSource implements RunSource {
     const agents: AgentView[] = [
       ...running.map(
         (r): AgentView => ({
+          agentId: null,
           label: agentLabel(r.agentId, r.key),
           phase: null,
           state: alive ? "running" : "stale",
@@ -288,6 +290,7 @@ export class ClaudeRunSource implements RunSource {
         }),
       ),
       ...Array.from({ length: done }, (): AgentView => ({
+        agentId: null,
         label: "agent",
         phase: null,
         state: "done",

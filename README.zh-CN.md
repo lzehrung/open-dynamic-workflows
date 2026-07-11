@@ -11,7 +11,7 @@ Gemini、Qwen、Kimi 编排成可调度的机群——与 Claude Code 自带 Wor
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/Node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](tsconfig.json)
-[![tests](https://img.shields.io/badge/tests-238%20passing-brightgreen.svg)](tests)
+[![tests](https://img.shields.io/badge/tests-256%20passing-brightgreen.svg)](tests)
 [![runtime deps](https://img.shields.io/badge/runtime%20deps-0-blue.svg)](package.json)
 
 [English](README.md) · [简体中文](README.zh-CN.md)
@@ -200,19 +200,32 @@ odw run examples/fan-out-reduce.js --wait --args '{"question": "Design a rate li
 
 ## 运行与观测
 
-`odw` CLI 在后台 worker 里启动脚本(fire-and-poll),并让你观测它。`--wait` 会阻塞并
-打印结果。
+在交互式终端里,`odw run` 会附着一个**实时前台视图**——每个 agent 的启动、转轮、结算,
+按 phase 逐步展示,结束时打印结果。Ctrl-C 只是断开观察(运行继续);`odw attach <id>`
+可随时重新附着。
 
 ```bash
-odw run wf.js [--args JSON|@file] [--wait]   # 启动(后台);--wait 阻塞并打印结果
+odw run wf.js [--args JSON|@file]            # 终端里前台展示;运行本体仍是独立 worker
                                              #   --adapter <name> 指定这次运行的默认 agent
-                                             #   --timeout <s> 限制等待时长;--budget <tokens> 设置 budget.total
-odw status <id>          # 状态 + agent 计数
-odw logs <id> --follow   # 流式输出进度事件
-odw result <id>          # 最终值
-odw pause|resume|stop <id>
+                                             #   --budget <tokens> 设置 budget.total
+```
+
+运行本体永远在 detached 后台 worker 里执行。只要你的 shell 不是终端——`$(…)` 捕获、
+管道、cron、CI、另一个 agent——同一条命令保持旧契约:立即返回并打印 run id
+(fire-and-poll):
+
+```bash
+RUN=$(odw run wf.js)     # 非 TTY:打印 run id 并立即返回
+odw attach $RUN          # 实时视图(被管道时为纯行输出);--timeout <s> 超时退出码 124
+odw status $RUN          # 状态 + agent 计数
+odw logs $RUN --follow   # 流式输出原始进度事件
+odw result $RUN          # 最终值
+odw pause|resume|stop $RUN
 odw list
 ```
+
+`--fg` / `-d, --detach` / `--wait`(静默阻塞到结束并打印结果)可显式指定模式;
+环境变量 `ODW_DETACH=1` 强制后台。
 
 一次运行在独立的 detached worker 进程里执行,并把一切持久化到一个 run 目录——所以它能
 比启动它的命令活得更久,也能从任何地方被观测。
@@ -371,7 +384,7 @@ npm run build:binary  # 打包 + Node SEA + postject → 单个自包含的 ./bu
 [Releases](https://github.com/xz1220/open-dynamic-workflows/releases)。
 
 **核心运行时已交付。** 完整运行时已在 `main` 上——适配层、执行桥接、工作区隔离、异步调度器、
-注入原语、loader/transform、JSON-Schema 引擎、后台运行时,以及 `odw` CLI。**238 个测试
+注入原语、loader/transform、JSON-Schema 引擎、后台运行时,以及 `odw` CLI。**256 个测试
 通过**,旗舰示例 [`examples/deep-research.js`](examples/deep-research.js) 端到端跑通
 (plan → gather → verify → synthesize → critique)。
 

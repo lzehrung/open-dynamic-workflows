@@ -11,7 +11,7 @@ Workflow tool, plus a web dashboard that chats with Codex and watches every run 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/Node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](tsconfig.json)
-[![tests](https://img.shields.io/badge/tests-238%20passing-brightgreen.svg)](tests)
+[![tests](https://img.shields.io/badge/tests-256%20passing-brightgreen.svg)](tests)
 [![runtime deps](https://img.shields.io/badge/runtime%20deps-0-blue.svg)](package.json)
 
 [English](README.md) · [简体中文](README.zh-CN.md)
@@ -215,19 +215,32 @@ reproducibility. Full reference: [`skills/open-dynamic-workflows/references/prim
 
 ## Run and observe
 
-The `odw` CLI starts a script in a background worker (fire-and-poll) and lets you
-watch it. `--wait` blocks and prints the result.
+In an interactive terminal, `odw run` attaches a **live foreground view** — every
+agent as it starts, spins, and settles, phase by phase, with the result printed
+at the end. Ctrl-C detaches (the run keeps going); `odw attach <id>` re-attaches.
 
 ```bash
-odw run wf.js [--args JSON|@file] [--wait]   # start (background); --wait blocks & prints result
+odw run wf.js [--args JSON|@file]            # foreground in a terminal; run keeps its own worker
                                              #   --adapter <name> sets this run's default agent
-                                             #   --timeout <s> caps the wait; --budget <tokens> sets budget.total
-odw status <id>          # state + agent count
-odw logs <id> --follow   # stream progress events
-odw result <id>          # final value
-odw pause|resume|stop <id>
+                                             #   --budget <tokens> sets budget.total
+```
+
+The run itself always executes in a detached background worker. Anywhere your
+shell is not a terminal — `$(…)` capture, pipes, cron, CI, another agent — the
+same command detaches and prints the run id, exactly as before (fire-and-poll):
+
+```bash
+RUN=$(odw run wf.js)     # non-TTY: prints the run id and returns immediately
+odw attach $RUN          # live view (or plain lines when piped); --timeout <s> exits 124
+odw status $RUN          # state + agent count
+odw logs $RUN --follow   # stream raw progress events
+odw result $RUN          # final value
+odw pause|resume|stop $RUN
 odw list
 ```
+
+`--fg` / `-d, --detach` / `--wait` (block silently, print the result) force a
+mode explicitly; `ODW_DETACH=1` forces background from the environment.
 
 A run executes in a detached worker process and persists everything to a run
 directory, so it outlives the command that started it and can be observed from
@@ -407,7 +420,7 @@ runs. See
 **Core runtime is shipped.** The full runtime is on `main` — the adapter layer, execution
 bridge, workspace isolation, the async scheduler, the injected primitives, the
 loader/transform, the JSON-Schema engine, the background runtime, and the `odw`
-CLI. **238 tests pass**, and the flagship [`examples/deep-research.js`](examples/deep-research.js)
+CLI. **256 tests pass**, and the flagship [`examples/deep-research.js`](examples/deep-research.js)
 runs end-to-end (plan → gather → verify → synthesize → critique).
 
 ### Roadmap (v1.5+)
