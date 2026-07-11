@@ -109,6 +109,29 @@ test("readEventsSince advances only past complete lines and survives truncation"
   );
 });
 
+test("readEventsSince: a REPLACED file that outgrew the old offset is re-read from 0", () => {
+  const store = freshStore();
+  const runId = makeRun(store);
+  const path = store.eventsPath(runId);
+
+  appendFileSync(path, JSON.stringify({ ts: 1, type: "run_started" }) + "\n");
+  let cur = store.readEventsSince(runId, { offset: 0 }).cursor;
+
+  // Replace the file wholesale (new inode) with MORE bytes than the old offset:
+  // a size-only check would silently read from the middle of the new file.
+  rmSync(path);
+  const lines = [
+    JSON.stringify({ ts: 10, type: "run_started" }),
+    JSON.stringify({ ts: 11, type: "log", message: "padding so the new file is longer" }),
+  ];
+  writeFileSync(path, lines.join("\n") + "\n");
+  const r = store.readEventsSince(runId, cur);
+  assert.deepEqual(
+    r.events.map((e) => e.ts),
+    [10, 11],
+  );
+});
+
 // --- live attach: happy path ----------------------------------------------------------
 
 test("attachRun (live): scrollback narrates phases/agents and pairing uses agentId", async () => {
@@ -198,6 +221,68 @@ test("attachRun (live): a failed run paints the error and exits 1", async () => 
   assert.match(screen, /exploded badly/);
   assert.match(screen, /✖ failed/);
   assert.equal(out.text(), ""); // no result JSON on stdout for a failed run
+});
+
+test("attachRun: a run_finished event with a stuck status still settles as done", async () => {
+  const store = freshStore();
+  const runId = makeRun(store, "stuck");
+  const term = new FakeTerm(100);
+  const out = new Collector();
+
+  emit(store, runId, { ts: 1, type: "run_started", runId });
+  emit(store, runId, { ts: 2, type: "run_finished", runId });
+  store.writeResult(runId, "late");
+  // status.state stays "running" forever — the worker died between writes.
+
+  const code = await attachRun(store, runId, {
+    out,
+    err: term,
+    live: true,
+    pollMs: 20,
+    signals: false,
+    env: ENV,
+  });
+  assert.equal(code, 0);
+  assert.match(term.text(), /status never settled/);
+  assert.equal(JSON.parse(out.text()), "late");
+});
+
+test("attachRun: workflow-controlled run names are sanitized before the header", async () => {
+  const store = freshStore();
+  const runId = makeRun(store, "evil\x1b]0;pwned\x07name");
+  const term = new FakeTerm(100);
+  emit(store, runId, { ts: 1, type: "run_finished", runId });
+  store.writeResult(runId, null);
+  store.updateStatus(runId, { state: "done" });
+  await attachRun(store, runId, {
+    out: new Collector(),
+    err: term,
+    live: true,
+    pollMs: 10,
+    signals: false,
+    env: ENV,
+  });
+  assert.doesNotMatch(term.raw, /\x1b\]0;/); // the OSC never reaches the terminal
+  assert.match(term.text(), /evilname/);
+});
+
+test("attachRun: TERM=dumb never enters the live renderer (no cursor CSI at all)", async () => {
+  const store = freshStore();
+  const runId = makeRun(store, "dumb");
+  const term = new FakeTerm(80);
+  emit(store, runId, { ts: 1, type: "run_finished", runId });
+  store.writeResult(runId, 1);
+  store.updateStatus(runId, { state: "done" });
+  const code = await attachRun(store, runId, {
+    out: new Collector(),
+    err: term,
+    pollMs: 10,
+    signals: false,
+    env: { TERM: "dumb" },
+  });
+  assert.equal(code, 0);
+  assert.doesNotMatch(term.raw, /\x1b\[\?25l/);
+  assert.doesNotMatch(term.raw, /\x1b\[0J/);
 });
 
 // --- timeout & detach -------------------------------------------------------------------

@@ -33,6 +33,7 @@ import { listWorkflows, resolveWorkflow } from "./workflows/resolve.js";
 
 export const COMMANDS = [
   "run",
+  "attach",
   "rerun",
   "list",
   "status",
@@ -459,7 +460,11 @@ async function cmdRerun(rest: string[]): Promise<number> {
   // source into the NEW run (via startRunFromSource) rather than pointing the new
   // run back at the old directory — so it stays self-contained and is correctly
   // flagged inline (no spurious run-by-name divergence note).
-  let newId: string;
+  //
+  // Observe the NEW run through the store the launcher actually created it in
+  // (the old run's configPath may point runsRoot somewhere the CLI-flag store
+  // does not) — never through the store the OLD run was located with.
+  let started: { runId: string; store: RunStore };
   if (meta.inline === true) {
     let sourceCode: string;
     try {
@@ -468,11 +473,15 @@ async function cmdRerun(rest: string[]): Promise<number> {
       process.stderr.write(`run ${runId}: its archived script is gone, cannot rerun\n`);
       return 1;
     }
-    newId = startRunFromSource(sourceCode, { ...opts, allowInvalid: true, origin: (meta.origin as string | null) ?? null }).runId;
+    started = startRunFromSource(sourceCode, {
+      ...opts,
+      allowInvalid: true,
+      origin: (meta.origin as string | null) ?? null,
+    });
   } else {
-    newId = startRun(script, opts).runId;
+    started = startRun(script, opts);
   }
-  return afterStart(store, newId, resolved.mode, {
+  return afterStart(started.store, started.runId, resolved.mode, {
     timeoutMs,
     hint: `re-running ${runId} as`,
   });

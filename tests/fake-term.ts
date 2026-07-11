@@ -14,11 +14,14 @@ export class FakeTerm {
   row = 0;
   col = 0;
   hiddenCursor = false;
+  /** Every byte ever written, unparsed — for asserting what was NOT emitted. */
+  raw = "";
   readonly isTTY = true;
 
   constructor(public columns = 80) {}
 
   write(chunk: string): void {
+    this.raw += chunk;
     let i = 0;
     while (i < chunk.length) {
       const ch = chunk[i]!;

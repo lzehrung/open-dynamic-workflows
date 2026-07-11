@@ -53,10 +53,12 @@ test("sanitizeText clamps long input with an ellipsis", () => {
 
 // --- width math -------------------------------------------------------------------
 
-test("displayWidth counts CJK as two columns", () => {
+test("displayWidth counts CJK and wide symbols as two columns", () => {
   assert.equal(displayWidth("abc"), 3);
   assert.equal(displayWidth("中文"), 4);
   assert.equal(displayWidth("a中b"), 4);
+  assert.equal(displayWidth("⌚"), 2); // U+231A — outside the CJK blocks
+  assert.equal(displayWidth("✅"), 2); // U+2705
 });
 
 test("truncateToWidth never exceeds the budget and marks the cut", () => {

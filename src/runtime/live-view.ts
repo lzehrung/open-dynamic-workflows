@@ -139,11 +139,20 @@ class LiveView {
   }
 
   /** Erase the active block (cursor returns to the end of the scrollback). */
-  private eraseBlock(): void {
+  eraseBlock(): void {
     if (this.blockLines > 0) {
       this.err.write(cursor.up(this.blockLines) + cursor.toCol1 + cursor.eraseDown);
       this.blockLines = 0;
     }
+  }
+
+  /**
+   * Abandon the active block without erasing it. After a terminal resize the
+   * old physical line count is unknowable (rewrap), so cursor-up erasure could
+   * eat scrollback; leaving one stale block behind is the safe failure mode.
+   */
+  abandonBlock(): void {
+    this.blockLines = 0;
   }
 
   private permanent(lines: string[]): void {
@@ -308,7 +317,11 @@ export async function attachRun(
 ): Promise<number> {
   const env = opts.env ?? process.env;
   const now = opts.now ?? Date.now;
-  const live = opts.live ?? opts.err.isTTY === true;
+  // Live rendering needs real cursor control, not just a TTY: TERM=dumb (or no
+  // TERM at all) gets the plain line stream even under --fg.
+  const cursorCapable =
+    opts.err.isTTY === true && env.TERM !== undefined && env.TERM !== "dumb";
+  const live = (opts.live ?? opts.err.isTTY === true) && cursorCapable;
   const caps = detectCaps(opts.err, env);
   const pollMs = opts.pollMs ?? (live ? 120 : 250);
   const attachStart = now();
@@ -316,12 +329,16 @@ export async function attachRun(
 
   const status0 = store.readStatus(runId);
   const meta0 = store.readMeta(runId);
-  const name =
+  // meta.name is workflow-author-controlled: sanitize before it touches the
+  // terminal, like every other event-derived string.
+  const name = sanitizeText(
     (status0.name as string) ||
-    String(meta0.script ?? "")
-      .split(/[\\/]/)
-      .pop() ||
-    runId;
+      String(meta0.script ?? "")
+        .split(/[\\/]/)
+        .pop() ||
+      runId,
+    80,
+  );
 
   const view = live ? new LiveView(runId, name, caps, opts.err, now) : null;
 
@@ -330,6 +347,12 @@ export async function attachRun(
     interrupted = true;
   };
   const cleanupSignals: Array<() => void> = [];
+  const restoreScreen = () => {
+    if (view) {
+      view.eraseBlock();
+      opts.err.write(cursor.show);
+    }
+  };
   if (opts.signals !== false) {
     process.on("SIGINT", onSigint);
     cleanupSignals.push(() => process.removeListener("SIGINT", onSigint));
@@ -338,12 +361,39 @@ export async function attachRun(
       ["SIGHUP", 129],
     ] as const) {
       const h = () => {
-        if (live) opts.err.write(cursor.show + "\n");
+        restoreScreen();
         process.exit(code);
       };
       process.on(sig, h);
       cleanupSignals.push(() => process.removeListener(sig, h));
     }
+    // Ctrl-Z must not park the shell with a hidden cursor: restore the screen,
+    // re-raise the default suspend, and re-arm on resume.
+    const onTstp = () => {
+      restoreScreen();
+      process.removeListener("SIGTSTP", onTstp);
+      process.kill(process.pid, "SIGTSTP");
+      process.on("SIGTSTP", onTstp);
+    };
+    const onCont = () => {
+      if (view) {
+        opts.err.write(cursor.hide);
+        view.abandonBlock(); // repaint fresh on the next frame
+      }
+    };
+    process.on("SIGTSTP", onTstp);
+    process.on("SIGCONT", onCont);
+    cleanupSignals.push(() => process.removeListener("SIGTSTP", onTstp));
+    cleanupSignals.push(() => process.removeListener("SIGCONT", onCont));
+  }
+
+  // A resize rewraps old physical lines, making the cursor-up count a lie —
+  // abandon the block instead of corrupting scrollback (see abandonBlock).
+  const errStream = opts.err as { on?: Function; removeListener?: Function };
+  const onResize = () => view?.abandonBlock();
+  if (view && typeof errStream.on === "function") {
+    errStream.on("resize", onResize);
+    cleanupSignals.push(() => errStream.removeListener?.("resize", onResize));
   }
 
   if (view) {
@@ -351,8 +401,8 @@ export async function attachRun(
     view.header();
   }
 
-  let cur = { offset: 0 };
-  let terminalEventAt: number | null = null;
+  let cur: { offset: number; ino?: number } = { offset: 0 };
+  let terminalEvent: { at: number; state: string } | null = null;
   let emptyStatusSince: number | null = null;
 
   const finishLine = (code: number, cleanup: () => void): number => {
@@ -373,9 +423,9 @@ export async function attachRun(
         for (const ev of read.events) opts.err.write(formatEvent(ev) + "\n");
       }
       for (const ev of read.events) {
-        if (ev.type === "run_finished" || ev.type === "run_failed" || ev.type === "run_stopped") {
-          terminalEventAt = now();
-        }
+        if (ev.type === "run_finished") terminalEvent = { at: now(), state: "done" };
+        else if (ev.type === "run_failed") terminalEvent = { at: now(), state: "failed" };
+        else if (ev.type === "run_stopped") terminalEvent = { at: now(), state: "stopped" };
       }
 
       const status = store.readStatus(runId);
@@ -394,12 +444,14 @@ export async function attachRun(
         return finishLine(await settle(store, runId, state, status, view, opts), cleanup);
       }
       // …but a terminal EVENT with a status that never catches up (worker died
-      // between the two writes) must not hang the observer forever.
-      if (terminalEventAt !== null && now() - terminalEventAt > 2000) {
-        const inferred = "failed";
-        if (view) view.note("run ended but its status never settled — treating as failed");
-        else opts.err.write("run ended but its status never settled — treating as failed\n");
-        return finishLine(await settle(store, runId, inferred, status, view, opts), cleanup);
+      // between the two writes) must not hang the observer forever. Infer the
+      // state the event itself declared — a run_finished still settles as done
+      // and prints its result.
+      if (terminalEvent !== null && now() - terminalEvent.at > 2000) {
+        const msg = `run ended (${terminalEvent.state}) but its status never settled`;
+        if (view) view.note(msg);
+        else opts.err.write(msg + "\n");
+        return finishLine(await settle(store, runId, terminalEvent.state, status, view, opts), cleanup);
       }
 
       // A run directory that vanished (or a status that stays unreadable) must
@@ -419,8 +471,23 @@ export async function attachRun(
       // Worker liveness: a kill -9'd worker leaves status "running" forever.
       if (frame % 16 === 15 && now() - attachStart > 5000) {
         const pid = typeof status.pid === "number" ? status.pid : null;
-        if ((state === "running" || state === "paused") && isProcessAlive(pid) === false) {
-          const msg = `worker process (pid ${pid}) is gone; the run will not progress`;
+        if (state === "running" || state === "paused") {
+          // pid === null mirrors the dashboard's staleness rule: a live state
+          // that never recorded its worker pid is unverifiable — stale.
+          if (pid === null || isProcessAlive(pid) === false) {
+            const msg =
+              pid === null
+                ? `run reports "${state}" but never recorded a worker pid — treating as stale`
+                : `worker process (pid ${pid}) is gone; the run will not progress`;
+            if (view) view.note(msg);
+            else opts.err.write(msg + "\n");
+            return finishLine(1, cleanup);
+          }
+        }
+        // A spawn that dies before its first status write leaves "pending"
+        // forever; the launcher normally flips to running within milliseconds.
+        if (state === "pending" && now() - attachStart > 10_000) {
+          const msg = "run never started (still pending) — its worker likely failed to spawn";
           if (view) view.note(msg);
           else opts.err.write(msg + "\n");
           return finishLine(1, cleanup);
