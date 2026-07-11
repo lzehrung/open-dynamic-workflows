@@ -68,6 +68,18 @@ test("truncateToWidth never exceeds the budget and marks the cut", () => {
   assert.equal(truncateToWidth("anything", 0), "");
 });
 
+test("displayWidth and truncateToWidth are ANSI-transparent", () => {
+  const styled = "\x1b[38;2;16;185;129mgreen\x1b[0m and \x1b[1mbold\x1b[0m";
+  assert.equal(displayWidth(styled), "green and bold".length);
+  // fits by visible width → returned untouched, codes intact
+  assert.equal(truncateToWidth(styled, 20), styled);
+  // cut by visible width → escapes preserved, reset appended, no wrap
+  const cut = truncateToWidth(styled, 8);
+  assert.equal(displayWidth(cut) <= 8, true);
+  assert.match(cut, /\x1b\[38;2;16;185;129m/);
+  assert.equal(cut.endsWith("\x1b[0m"), true);
+});
+
 // --- durations --------------------------------------------------------------------
 
 test("elapsed/duration formatting is stable and clamps clock skew", () => {

@@ -182,30 +182,73 @@ function charWidth(cp: number): number {
   return 1;
 }
 
-/** Terminal display width of a (sanitized, style-free) string. */
+/**
+ * Length of the escape sequence starting at `i` (where `s[i]` is ESC). Used by
+ * the width walkers so STYLED strings measure and truncate by their *visible*
+ * columns — an SGR-heavy footer must not read as "too wide" and get cut.
+ */
+function escLen(s: string, i: number): number {
+  const n = s[i + 1];
+  if (n === "[") {
+    let j = i + 2;
+    while (j < s.length && !/[@-~]/.test(s[j]!)) j++;
+    return Math.min(j + 1, s.length) - i;
+  }
+  if (n === "]") {
+    let j = i + 2;
+    while (j < s.length && s[j] !== "\x07" && !(s[j] === ESC && s[j + 1] === "\\")) j++;
+    if (j >= s.length) return s.length - i;
+    return (s[j] === "\x07" ? j + 1 : j + 2) - i;
+  }
+  return Math.min(2, s.length - i);
+}
+
+/** Terminal display width of a string; ANSI escape sequences count as zero. */
 export function displayWidth(s: string): number {
   let w = 0;
-  for (const ch of s) w += charWidth(ch.codePointAt(0)!);
+  let i = 0;
+  while (i < s.length) {
+    if (s[i] === ESC) {
+      i += escLen(s, i);
+      continue;
+    }
+    const cp = s.codePointAt(i)!;
+    w += charWidth(cp);
+    i += String.fromCodePoint(cp).length;
+  }
   return w;
 }
 
 /**
- * Hard-truncate to a display width, appending an ellipsis when cut. Guarantees
- * the result never wraps, which is what keeps the repaint's cursor-up
- * arithmetic exact (one logical line == one physical line).
+ * Hard-truncate to a display width, appending an ellipsis when cut. Escape
+ * sequences pass through for free (and a reset is appended on a cut so styling
+ * never bleeds past the line). Guarantees the result never wraps, which is what
+ * keeps the repaint's cursor-up arithmetic exact — one logical line is one
+ * physical line, always.
  */
 export function truncateToWidth(s: string, max: number): string {
   if (max <= 0) return "";
   if (displayWidth(s) <= max) return s;
   let w = 0;
+  let i = 0;
   let out = "";
-  for (const ch of s) {
-    const cw = charWidth(ch.codePointAt(0)!);
+  let sawEsc = false;
+  while (i < s.length) {
+    if (s[i] === ESC) {
+      const len = escLen(s, i);
+      out += s.slice(i, i + len);
+      sawEsc = true;
+      i += len;
+      continue;
+    }
+    const cp = s.codePointAt(i)!;
+    const cw = charWidth(cp);
     if (w + cw > max - 1) break;
-    out += ch;
+    out += String.fromCodePoint(cp);
     w += cw;
+    i += String.fromCodePoint(cp).length;
   }
-  return `${out}…`;
+  return `${out}…${sawEsc ? RESET : ""}`;
 }
 
 /** Pad with spaces to a display width (no-op if already wider). */
