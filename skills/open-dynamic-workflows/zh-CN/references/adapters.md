@@ -16,9 +16,11 @@ shell 出去执行一个本地命令，通过 stdin 或一个参数把拼好的 
 命令模板刻意保守，而且内置适配器之间**权限并不相同**：
 
 - `codex` 以 `--sandbox workspace-write` 运行：开箱即可在其工作区内**编辑文件并执行
-  命令**。
-- `claude` 以 `--permission-mode acceptEdits` 运行：**能编辑文件但不能执行命令**
-  （要求它运行什么的 prompt 会卡住或被拒绝）。要让 Claude 也能跑命令，用
+  命令**。它还带着 `--search`，可以**原生搜索网页**。
+- `claude` 以 `--permission-mode acceptEdits` 加 `--allowedTools WebSearch WebFetch`
+  运行：**能编辑文件、能用网页工具，但不能执行命令**（要求它运行什么的 prompt 会卡住
+  或被拒绝）。网页白名单很关键：headless 的 acceptEdits 否则会静默拒绝
+  WebSearch/WebFetch，`examples/deep-research.js` 这类调研 workflow 会直接跑不通。要让 Claude 也能跑命令，用
   `--dangerously-skip-permissions` 覆盖该适配器——它**没有任何沙箱**，所以只能对着一个
   用完即弃的 `--source` 目录这么干，绝不要指向你的真实仓库：
 

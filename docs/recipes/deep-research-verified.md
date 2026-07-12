@@ -14,7 +14,9 @@ input) ≈ 4% of a Codex Pro 5-hour window.
 ## Adapter requirement
 
 Search agents need web search; fetch/verify agents need to retrieve pages.
-The stock codex adapter has neither. Add this to `~/.config/odw/config.json`:
+The built-in codex adapter ships with `--search` (native web search), but its
+workspace-write sandbox blocks network access, so fetch agents cannot curl
+pages. For full fetch capability, add this to `~/.config/odw/config.json`:
 
 ```json
 "codex-research": {
@@ -28,8 +30,9 @@ The stock codex adapter has neither. Add this to `~/.config/odw/config.json`:
 }
 ```
 
-`claude-web` (with `--allowedTools WebSearch WebFetch`) also works, at Claude
-token prices.
+The built-in `claude` adapter (WebSearch and WebFetch are allowlisted out of
+the box) also works, at Claude token prices — set `ADAPTER=claude` on the
+wrapper or pass `--adapter claude`.
 
 ## Run from the command line
 

@@ -6,7 +6,7 @@
 #   run-deep-research.sh "your research question"
 #   run-deep-research.sh @question.txt                 # question from a file
 #   run-deep-research.sh -s anysearch "question ..."   # custom report folder slug
-#   ADAPTER=claude-web run-deep-research.sh "..."      # override the agent adapter
+#   ADAPTER=claude run-deep-research.sh "..."          # override the agent adapter
 #   OUT_ROOT=~/reports run-deep-research.sh "..."      # override the output root
 #
 # Exit code is honest: 0 only when the workflow run reached `done` (odw --wait).

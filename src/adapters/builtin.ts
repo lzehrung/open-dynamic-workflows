@@ -32,6 +32,8 @@ export const BUILTIN_ADAPTERS: Record<string, RawAdapter> = {
     label: "Codex CLI",
     command: [
       "codex",
+      // top-level flag: `codex exec --search` is rejected, it must precede `exec`
+      "--search",
       "exec",
       "--skip-git-repo-check",
       "--sandbox",
@@ -45,7 +47,18 @@ export const BUILTIN_ADAPTERS: Record<string, RawAdapter> = {
   },
   claude: {
     label: "Claude Code",
-    command: ["claude", "--print", "--permission-mode", "acceptEdits", "--no-session-persistence"],
+    // headless acceptEdits silently DENIES WebSearch/WebFetch unless allowlisted,
+    // which breaks research workflows (e.g. examples/deep-research.js)
+    command: [
+      "claude",
+      "--print",
+      "--permission-mode",
+      "acceptEdits",
+      "--allowedTools",
+      "WebSearch",
+      "WebFetch",
+      "--no-session-persistence",
+    ],
     stdin: "{prompt}",
     flags: { model: ["--model"] },
   },
