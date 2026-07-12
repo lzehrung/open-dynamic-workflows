@@ -2,14 +2,19 @@
 # Run the deep-research-verified workflow and persist the report under
 # ~/.odw/reports/deep-research/<utc-timestamp>-<slug>/ (result.json, report.md, run.log).
 #
+# On an interactive terminal the run shows ODW's live foreground view
+# (Ctrl-C detaches the view; the run keeps going and the wrapper tells you
+# how to reattach). In cron/pipes it runs silently with an honest exit code.
+#
 # Usage:
 #   run-deep-research.sh "your research question"
 #   run-deep-research.sh @question.txt                 # question from a file
 #   run-deep-research.sh -s anysearch "question ..."   # custom report folder slug
+#   run-deep-research.sh -q "question ..."             # quiet: skip the live view on a TTY
 #   ADAPTER=claude run-deep-research.sh "..."          # override the agent adapter
 #   OUT_ROOT=~/reports run-deep-research.sh "..."      # override the output root
 #
-# Exit code is honest: 0 only when the workflow run reached `done` (odw --wait).
+# Exit code is honest: 0 only when the workflow run reached `done`.
 # The last stdout line is the report directory, so callers can do:
 #   dir=$(run-deep-research.sh "..." | tail -1)
 set -euo pipefail
@@ -25,16 +30,17 @@ if ! command -v odw >/dev/null 2>&1; then
 fi
 command -v odw >/dev/null 2>&1 || { echo "odw not found on PATH" >&2; exit 127; }
 
-SLUG=""
-while getopts "s:" opt; do
+SLUG="" QUIET=0
+while getopts "s:q" opt; do
   case "$opt" in
     s) SLUG="$OPTARG" ;;
+    q) QUIET=1 ;;
     *) exit 2 ;;
   esac
 done
 shift $((OPTIND - 1))
 
-[ $# -ge 1 ] || { echo "usage: $(basename "$0") [-s slug] \"<question>\" | @question-file" >&2; exit 2; }
+[ $# -ge 1 ] || { echo "usage: $(basename "$0") [-s slug] [-q] \"<question>\" | @question-file" >&2; exit 2; }
 QUESTION="$1"
 case "$QUESTION" in @*) QUESTION="$(cat "${QUESTION#@}")" ;; esac
 [ -n "${QUESTION// /}" ] || { echo "empty question" >&2; exit 2; }
@@ -57,10 +63,41 @@ python3 -c 'import json,sys; print(json.dumps(sys.argv[1], ensure_ascii=False))'
   echo "adapter:  $ADAPTER"
 } > "$OUT_DIR/run.log"
 
+run_status() { odw status "$1" 2>/dev/null | head -1; }
+
 started=$(date +%s)
 status=0
-odw run "$WORKFLOW" --args @"$OUT_DIR/args.json" --adapter "$ADAPTER" --wait \
-  > "$OUT_DIR/result.json" 2>> "$OUT_DIR/run.log" || status=$?
+
+if [ "$QUIET" -eq 0 ] && [ -t 1 ] && [ -t 2 ]; then
+  # ── Interactive: detach the run, then attach the live foreground view ──
+  RUN_ID="$(odw run "$WORKFLOW" --args @"$OUT_DIR/args.json" --adapter "$ADAPTER" 2>> "$OUT_DIR/run.log")"
+  [ -n "$RUN_ID" ] || { echo "failed to launch run — see $OUT_DIR/run.log" >&2; exit 1; }
+  echo "run id: $RUN_ID  (report dir: $OUT_DIR)" | tee -a "$OUT_DIR/run.log"
+
+  # Ctrl-C must reach attach (which detaches cleanly) without killing us.
+  trap ':' INT
+  odw attach "$RUN_ID" || true
+  trap - INT
+
+  state="$(run_status "$RUN_ID")"
+  case "$state" in
+    *"[done]"*) status=0 ;;
+    *"[failed]"*|*"[stopped]"*) status=1 ;;
+    *)
+      echo "view detached — the run is still going."
+      echo "  reattach:     odw attach $RUN_ID"
+      echo "  fetch result: odw result $RUN_ID > $OUT_DIR/result.json"
+      echo "$OUT_DIR"
+      exit 0
+      ;;
+  esac
+  odw result "$RUN_ID" > "$OUT_DIR/result.json" 2>> "$OUT_DIR/run.log" || status=$?
+else
+  # ── Non-interactive (cron/pipes): block silently, honest exit code ──
+  odw run "$WORKFLOW" --args @"$OUT_DIR/args.json" --adapter "$ADAPTER" --wait \
+    > "$OUT_DIR/result.json" 2>> "$OUT_DIR/run.log" || status=$?
+fi
+
 echo "elapsed: $(( $(date +%s) - started ))s  exit: $status" >> "$OUT_DIR/run.log"
 
 if [ "$status" -ne 0 ]; then

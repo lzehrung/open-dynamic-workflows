@@ -47,8 +47,14 @@ scripts/run-deep-research.sh "your research question"
 scripts/run-deep-research.sh -s anysearch @question.txt   # custom slug, question from file
 ```
 
-The wrapper's exit code is the run's real outcome (`--wait` semantics), and
-its last stdout line is the report directory.
+On an interactive terminal the wrapper shows ODW's live foreground view
+(detached launch + `odw attach`): you watch phases and agents render in real
+time, and Ctrl-C only detaches the view — the run keeps going and the wrapper
+prints how to reattach and fetch the result. Pass `-q` to skip the live view.
+In cron/pipes it runs silently (`--wait`).
+
+The wrapper's exit code is the run's real outcome, and its last stdout line is
+the report directory.
 
 ## Run on a schedule
 
