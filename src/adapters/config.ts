@@ -15,9 +15,9 @@
  * file found above is merged on top, so a user only specifies what they change.
  */
 
-import { accessSync, constants, existsSync, readFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { cpus, homedir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 
 import { AdapterNotFound, ConfigError } from "../errors.js";
 import { BUILTIN_ADAPTERS, DEFAULT_SETTINGS, type RawAdapter } from "./builtin.js";
@@ -25,16 +25,23 @@ import type { Adapter, AdapterFlags, Config, Settings } from "./types.js";
 
 export const CONFIG_ENV_VAR = "ODW_CONFIG";
 
-const SEARCH_PATHS = [
-  join(process.cwd(), "odw.config.json"),
-  join(homedir(), ".config", "odw", "config.json"),
-];
-
-/** Load configuration, merging any discovered file over the built-ins. */
-export function loadConfig(path?: string | null): Config {
-  const raw = readRaw(path);
-  for (const w of collectConfigWarnings(raw)) {
-    process.stderr.write(`odw: config warning: ${w}\n`);
+/**
+ * Load configuration, merging any discovered file over the built-ins.
+ * `quiet` suppresses the stderr lint warnings — for preflight checks that load
+ * the same file a subsequent full load will lint anyway (else they'd print twice).
+ * `cwd` overrides where the project-local `./odw.config.json` is searched —
+ * pass the run's --source dir so a launch preflight sees the same file the
+ * worker (spawned with cwd = source) will actually load.
+ */
+export function loadConfig(
+  path?: string | null,
+  opts?: { quiet?: boolean; cwd?: string },
+): Config {
+  const raw = readRaw(path, opts?.cwd);
+  if (!opts?.quiet) {
+    for (const w of collectConfigWarnings(raw)) {
+      process.stderr.write(`odw: config warning: ${w}\n`);
+    }
   }
   return {
     adapters: buildAdapters((raw.adapters as Record<string, RawAdapter>) ?? {}),
@@ -157,9 +164,15 @@ export function resolveAdapter(config: Config, name?: string | null): Adapter {
       installed.length > 0
         ? `installed here: ${installed.join(", ")}`
         : "none of their CLIs were found on PATH";
+    // Name a REAL installed adapter in every suggested fix — a copy-pasteable
+    // remediation is the whole error UX for non-interactive (agent) callers.
+    const pick = installed[0] ?? available[0]!;
     throw new AdapterNotFound(
       `no adapter specified and no defaultAdapter set; available: ${available.join(", ")} (${found}). ` +
-        `Set "defaultAdapter" in odw.config.json, or pass one per call: agent(prompt, { adapter: "claude" })`,
+        `Fix: run 'odw init' to pick a default (non-interactive: odw init --adapter ${pick}); ` +
+        `or pass --adapter ${pick} to odw run; ` +
+        `or set "defaultAdapter" in odw.config.json; ` +
+        `or name one per call: agent(prompt, { adapter: "${pick}" })`,
     );
   }
   const adapter = config.adapters[chosen];
@@ -167,6 +180,64 @@ export function resolveAdapter(config: Config, name?: string | null): Adapter {
     throw new AdapterNotFound(`unknown adapter '${chosen}'; available: ${available.join(", ")}`);
   }
   return adapter;
+}
+
+/** Result of persisting a default-adapter choice. */
+export interface DefaultAdapterWrite {
+  /** The config file the default was written to. */
+  path: string;
+  /** Set when a higher-priority config source will shadow the file written. */
+  shadowWarning: string | null;
+}
+
+/**
+ * Persist `defaultAdapter` into the config file a future run will read: an
+ * explicit path (`--config`), else `$ODW_CONFIG`, else the user-global
+ * `~/.config/odw/config.json` (created if absent). Existing keys are kept;
+ * formatting is normalized to 2-space JSON.
+ *
+ * The user-global target sits at the BOTTOM of the search order, so when a
+ * `./odw.config.json` would shadow it the caller gets a warning to surface —
+ * a silently ineffective write is this codebase's most expensive bug class.
+ */
+export function writeDefaultAdapter(
+  name: string,
+  explicitPath?: string | null,
+): DefaultAdapterWrite {
+  const env = process.env[CONFIG_ENV_VAR];
+  const target = explicitPath
+    ? expandHome(explicitPath)
+    : env
+      ? expandHome(env)
+      : join(homedir(), ".config", "odw", "config.json");
+  let raw: Record<string, unknown> = {};
+  if (existsSync(target)) {
+    const text = readFileSync(target, "utf8");
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch (err) {
+      throw new ConfigError(`could not parse config ${target}: ${(err as Error).message}`);
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new ConfigError(`config ${target} must be a JSON object`);
+    }
+    raw = parsed as Record<string, unknown>;
+  }
+  raw.defaultAdapter = name;
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, JSON.stringify(raw, null, 2) + "\n");
+
+  let shadowWarning: string | null = null;
+  if (!explicitPath && !env) {
+    const cwdConfig = join(process.cwd(), "odw.config.json");
+    if (existsSync(cwdConfig)) {
+      shadowWarning =
+        `${cwdConfig} takes precedence over ${target} — ` +
+        `runs started from this directory will ignore the default just written`;
+    }
+  }
+  return { path: target, shadowWarning };
 }
 
 /** One adapter row shown in settings and config diagnostics. */
@@ -297,8 +368,8 @@ function expandHome(p: string): string {
   return p;
 }
 
-function readRaw(path?: string | null): Record<string, unknown> {
-  const located = locate(path);
+function readRaw(path?: string | null, cwd?: string): Record<string, unknown> {
+  const located = locate(path, cwd);
   if (located === null) return {};
   let text: string;
   try {
@@ -318,7 +389,7 @@ function readRaw(path?: string | null): Record<string, unknown> {
   }
 }
 
-function locate(path?: string | null): string | null {
+function locate(path?: string | null, cwd?: string): string | null {
   if (path) {
     const p = expandHome(path);
     if (!existsSync(p)) throw new ConfigError(`config file not found: ${p}`);
@@ -330,7 +401,10 @@ function locate(path?: string | null): string | null {
     if (!existsSync(p)) throw new ConfigError(`${CONFIG_ENV_VAR} points to a missing file: ${p}`);
     return p;
   }
-  for (const candidate of SEARCH_PATHS) {
+  for (const candidate of [
+    join(cwd ?? process.cwd(), "odw.config.json"),
+    join(homedir(), ".config", "odw", "config.json"),
+  ]) {
     if (existsSync(candidate)) return candidate;
   }
   return null;

@@ -45,7 +45,8 @@ import { applyAgentEvent, isProcessAlive, type AgentView } from "./runs-view.js"
 
 export type RunMode = "attach" | "wait" | "detach";
 
-function envTruthy(v: string | undefined): boolean {
+/** The one rule for CI/ODW_DETACH-style flags — init's prompt gate reuses it. */
+export function envTruthy(v: string | undefined): boolean {
   return v !== undefined && v !== "" && v !== "0" && v.toLowerCase() !== "false";
 }
 
