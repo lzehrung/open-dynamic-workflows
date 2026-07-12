@@ -150,7 +150,7 @@ const attempts = await parallel(
         `Constraints:\n${constraints.join('\n') || '(none)'}\n\n` +
         `Context:\n${context.join('\n') || '(none)'}\n\n` +
         `Return a concrete, evidence-aware result. If this is a coding task, return the recommended edits and checks rather than claiming to have changed the real workspace.`,
-      { label: `lane-${i + 1}-${slug(stream.name)}`, phase: 'Attack', schema: ATTEMPT }
+      { label: `lane-${i + 1}-${slug(stream.name)}`, phase: 'Attack', schema: ATTEMPT, isolation: 'worktree' }
     ).then((report) => ({ lane: stream.name, report }))
   )
 )

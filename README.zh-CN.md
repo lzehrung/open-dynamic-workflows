@@ -396,7 +396,7 @@ npm run build:binary  # 打包 + Node SEA + postject → 单个自包含的 ./bu
 
 ### 路线图(v1.5+)
 
-`model` / `agentType` 富路由 · git-worktree `isolation` · adapter 上报的真实 token
+`model` / `agentType` 富路由 · adapter 上报的真实 token
 用量(当前预算按估算计量)· resume / journaling · 用于可重放确定性的
 `Date.now`/`Math.random` 沙箱。
 完整方案见 [`docs/dynamic-workflows-tech-plan.md`](docs/dynamic-workflows-tech-plan.md);
@@ -424,8 +424,8 @@ ODW 也带一个 skill——但 skill 的职责是教你的 agent 写和跑 work
 <summary><b>这和 LangGraph / n8n / Airflow 有什么区别?</b></summary>
 
 那些编排的是 API 调用和自定义节点。ODW 编排的是 <b>coding-agent CLI</b>——你已经在付
-费、已经配好的那些(Codex、Claude Code、Gemini、…)——在它们自己的工作目录里跑,带工
-作区隔离和 diff。没有 DSL、没有服务集群:一个 workflow 就是一个 Claude Code 现有方言
+费、已经配好的那些(Codex、Claude Code、Gemini、…)——在本次运行自己的工作目录里跑,
+工作区隔离和 diff 按 agent 选入。没有 DSL、没有服务集群:一个 workflow 就是一个 Claude Code 现有方言
 的纯 JavaScript 文件,引擎是零依赖的 Node CLI。
 </details>
 

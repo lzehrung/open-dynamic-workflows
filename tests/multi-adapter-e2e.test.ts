@@ -28,7 +28,6 @@ function duelConfig(dir: string): string {
   writeFileSync(
     path,
     JSON.stringify({
-      workspaceMode: "inplace",
       adapters: {
         impl: { command: [execPath, "-e", impl], stdin: "{prompt}" },
         rev: { command: [execPath, "-e", rev], stdin: "{prompt}" },

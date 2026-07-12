@@ -433,7 +433,7 @@ runs end-to-end (plan → gather → verify → synthesize → critique).
 
 ### Roadmap (v1.5+)
 
-`model` / `agentType` rich routing · git-worktree `isolation` · adapter-reported
+`model` / `agentType` rich routing · adapter-reported
 token usage (today's budget meters an estimate) · resume / journaling · a
 `Date.now`/`Math.random` sandbox for replay-determinism. Full plan:
 [`docs/dynamic-workflows-tech-plan.md`](docs/dynamic-workflows-tech-plan.md).
@@ -464,8 +464,8 @@ workflows, not to be the orchestration.
 
 Those orchestrate API calls and custom nodes. ODW orchestrates <b>coding-agent
 CLIs</b> — the agents you already pay for and configure (Codex, Claude Code,
-Gemini, …) — in their own working directories, with workspace isolation and
-diffs. There is no DSL and no server farm: a workflow is one plain JavaScript
+Gemini, …) — in the run's own working directory, with opt-in per-agent
+workspace isolation and diffs. There is no DSL and no server farm: a workflow is one plain JavaScript
 file in Claude Code's existing dialect, and the engine is a zero-dependency
 Node CLI.
 </details>

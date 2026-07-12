@@ -42,7 +42,7 @@ export interface AgentOptions {
   model?: string;
   /** Persona to take on; injected into the prompt so it works on every CLI. */
   agentType?: string;
-  /** `"worktree"` requests isolation; satisfied by a copy-isolated workspace. */
+  /** `"worktree"`: run this agent in a throwaway git worktree (as in Claude Code). */
   isolation?: "worktree";
 }
 

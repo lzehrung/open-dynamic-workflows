@@ -55,14 +55,14 @@ export interface OptionRouter {
  */
 export class LiteralRouter implements OptionRouter {
   plan(input: RouterInput): InvocationPlan {
-    const { request, adapter, settings } = input;
+    const { request, adapter } = input;
     const context: PlaceholderContext = {};
     const extraArgs: string[] = [];
     const notes: string[] = [];
 
     this.routeModel(request, adapter, context, extraArgs, notes);
     this.noteAgentType(request, adapter, notes);
-    const workspaceMode = this.routeIsolation(request, settings, notes);
+    const workspaceMode = this.routeIsolation(request);
 
     return { context, extraArgs, workspaceMode, notes };
   }
@@ -111,23 +111,11 @@ export class LiteralRouter implements OptionRouter {
   }
 
   /**
-   * isolation:'worktree' → a copy-isolated workspace. copy is already isolated
-   * (the agent runs on a throwaway tree, changes returned as a diff), so it
-   * satisfies the *intent* of worktree without git. Forced even when the run
-   * default is `inplace`, because requesting isolation must mean isolation.
+   * isolation:'worktree' → a real git worktree, exactly as in Claude Code; no
+   * routing note needed because nothing is degraded. Everything else runs in
+   * the source directory.
    */
-  private routeIsolation(
-    request: AgentRequest,
-    settings: Settings,
-    notes: string[],
-  ): WorkspaceMode {
-    if (request.isolation === "worktree") {
-      notes.push(
-        "isolation 'worktree' satisfied by a copy-isolated workspace " +
-          "(no real git worktree this phase)",
-      );
-      return "copy";
-    }
-    return settings.workspaceMode;
+  private routeIsolation(request: AgentRequest): WorkspaceMode {
+    return request.isolation === "worktree" ? "worktree" : "inplace";
   }
 }

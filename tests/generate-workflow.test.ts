@@ -45,7 +45,6 @@ function mockAuthorConfig(
     path,
     JSON.stringify({
       defaultAdapter: "mock",
-      workspaceMode: "inplace",
       adapters: { mock: { command: [execPath, "-e", js], stdin: "{prompt}" } },
     }),
   );
