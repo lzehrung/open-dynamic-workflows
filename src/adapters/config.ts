@@ -49,7 +49,6 @@ const KNOWN_TOP_KEYS = [
   "defaultAdapter",
   "concurrency",
   "maxAgents",
-  "workspaceMode",
   "timeout",
   "schemaRetries",
   "runsRoot",
@@ -65,8 +64,8 @@ const KNOWN_ADAPTER_KEYS = ["command", "stdin", "env", "timeout", "label", "flag
  *
  * Settings are read flat off the top level, so a nested `"settings": {…}`
  * wrapper or a misspelled key falls back to defaults with no error — which once
- * cost a real debugging session (`workspaceMode` quietly reverted to `copy` and
- * in-place edits evaporated). Surface those as warnings instead.
+ * cost a real debugging session (a nested key was silently ignored and the run
+ * behaved as if unconfigured). Surface those as warnings instead.
  */
 export function collectConfigWarnings(raw: Record<string, unknown>): string[] {
   const warnings: string[] = [];
@@ -394,7 +393,6 @@ function buildSettings(raw: Record<string, unknown>): Settings {
     defaultAdapter: pick("defaultAdapter", DEFAULT_SETTINGS.defaultAdapter),
     concurrency: numOrNull("concurrency", DEFAULT_SETTINGS.concurrency),
     maxAgents: Number(pick("maxAgents", DEFAULT_SETTINGS.maxAgents)),
-    workspaceMode: pick("workspaceMode", DEFAULT_SETTINGS.workspaceMode),
     timeout: numOrNull("timeout", DEFAULT_SETTINGS.timeout),
     schemaRetries: Number(pick("schemaRetries", DEFAULT_SETTINGS.schemaRetries)),
     runsRoot: pick("runsRoot", DEFAULT_SETTINGS.runsRoot),

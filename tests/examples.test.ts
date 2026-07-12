@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,13 +18,16 @@ async function runExample(
   args: unknown,
 ): Promise<{ state: string; result: unknown; error: Record<string, unknown> | null }> {
   const root = mkdtempSync(join(tmpdir(), "odw-ex-"));
+  // isolation:"worktree" (used by ultra-mode's lanes) needs a committed repo.
+  execFileSync("git", ["-C", root, "init", "-q"]);
+  execFileSync("git", ["-C", root, "-c", "user.email=t@t", "-c", "user.name=t",
+    "commit", "-q", "--no-gpg-sign", "--allow-empty", "-m", "init"]);
   try {
     const config = join(root, "odw.config.json");
     writeFileSync(
       config,
       JSON.stringify({
         defaultAdapter: "mock",
-        workspaceMode: "inplace",
         schemaRetries: 1,
         concurrency: 8,
         adapters: { mock: { command: [execPath, mockAgent], stdin: "{prompt}" } },

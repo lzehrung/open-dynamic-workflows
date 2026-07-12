@@ -33,6 +33,13 @@ export interface RunContext {
    * budget is an honest approximation, shared across nested workflow() calls.
    */
   usage: { outputChars: number };
+  /**
+   * Monotonic per-run agent-dispatch counter behind the `agentId` event field.
+   * A shared object (not a number) so nested workflow() children — built by
+   * spreading the parent context — keep allocating from the same sequence and
+   * ids stay unique across the whole run.
+   */
+  seq: { value: number };
   currentPhase: string | null;
   emit(ev: WorkflowEvent): void;
 }
@@ -81,6 +88,7 @@ export function buildContext(config: Config, options: BuildContextOptions = {}):
     source: options.source ?? process.cwd(),
     budgetTotal,
     usage,
+    seq: { value: 0 },
     currentPhase: null,
     emit(ev: WorkflowEvent): void {
       sink.emit(ev);

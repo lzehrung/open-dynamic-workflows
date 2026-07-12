@@ -4,7 +4,6 @@
   "defaultAdapter": "claude",
   "concurrency": 8,
   "maxAgents": 1000,
-  "workspaceMode": "copy",
   "timeout": 1800,
   "schemaRetries": 2,
   "runsRoot": "~/.odw/runs",

@@ -43,8 +43,6 @@ export interface Settings {
   concurrency: number | null;
   /** Hard ceiling on total dispatches per run (runaway guard). */
   maxAgents: number;
-  /** `"copy"` (isolated + diff) or `"inplace"` (read-only / fast). */
-  workspaceMode: "copy" | "inplace";
   /** Per-agent CLI timeout in seconds; `null` => no timeout. */
   timeout: number | null;
   /** Extra attempts when a schema fails to validate. */

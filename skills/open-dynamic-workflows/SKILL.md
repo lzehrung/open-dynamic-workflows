@@ -107,6 +107,12 @@ odw pause $RUN / resume $RUN / stop $RUN
 odw list                    # all runs
 ```
 
+Both patterns above behave exactly like this for you: your shell is not a
+terminal, so `odw run` detaches and prints the run id. Only a bare invocation
+in a human's interactive terminal attaches a live progress view instead
+(Ctrl-C there detaches; the run keeps going; `odw attach <run_id>` re-attaches).
+Force either way with `-d`/`--detach` or `--fg`, or `ODW_DETACH=1`.
+
 Saved workflows run by name (`odw run <name>`); lookup order:
 `.odw/workflows`, `.claude/workflows`, `~/.odw/workflows`,
 `~/.claude/workflows`.
@@ -123,10 +129,12 @@ read [`references/adapters.md`](references/adapters.md) and write an
 
 - **Isolation**: agents run independently and never see each other — unless
   the script feeds one's output into another's prompt.
-- **Workspace**: by default each agent runs in an isolated copy of the working
-  tree (copy mode); the real tree is never modified. `inplace` mode has no
-  isolation and no diff — use it only when you actually want in-place edits
-  and `--source` points at a directory you can afford to break.
+- **Workspace**: agents run directly in the run's source directory (`--source`,
+  default the current directory) — the same semantics as Claude Code's own
+  Workflow tool. For isolation, ask per agent with `isolation: "worktree"`: the
+  agent gets a throwaway **git worktree** (needs the source to be a git repo
+  with at least one commit; the agent sees HEAD, not uncommitted edits) and its
+  changes come back as a diff — the real tree is never modified.
 - **Cost**: concurrency is capped (default `min(16, cpus - 2)`) and total
   dispatches per run have a hard guard; use `odw pause` / `odw stop` when a
   run exceeds expectations.

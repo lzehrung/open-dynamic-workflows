@@ -83,7 +83,6 @@ export const DEFAULT_SETTINGS: Settings = {
   defaultAdapter: null, // falls back to the sole adapter, or must be chosen
   concurrency: null, // null => auto (min(16, cpus - 2))
   maxAgents: 1000, // runaway guard on total dispatches per run
-  workspaceMode: "copy", // "copy" (isolated) or "inplace"
   timeout: 1800, // per-agent CLI timeout, seconds
   schemaRetries: 2, // extra attempts when a schema fails to validate
   runsRoot: null, // null => ~/.odw/runs

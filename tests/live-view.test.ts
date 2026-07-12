@@ -1,0 +1,371 @@
+import assert from "node:assert/strict";
+import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test } from "node:test";
+
+import { attachRun, resolveRunMode } from "../src/runtime/live-view.js";
+import { RunStore } from "../src/runtime/run-store.js";
+import { FakeTerm } from "./fake-term.js";
+
+const ENV = { TERM: "xterm", LANG: "en_US.UTF-8" }; // color on (16), unicode on
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+function freshStore(): RunStore {
+  return new RunStore(mkdtempSync(join(tmpdir(), "odw-live-")));
+}
+
+function makeRun(store: RunStore, name = "demo"): string {
+  const runId = store.create({
+    script: "/tmp/never-read/wf.js",
+    args: null,
+    source: process.cwd(),
+    workflowName: name,
+  });
+  store.updateStatus(runId, { state: "running", pid: process.pid, name });
+  return runId;
+}
+
+function emit(store: RunStore, runId: string, ev: Record<string, unknown>): void {
+  appendFileSync(store.eventsPath(runId), JSON.stringify(ev) + "\n");
+}
+
+class Collector {
+  chunks: string[] = [];
+  readonly isTTY = false;
+  write(s: string): void {
+    this.chunks.push(s);
+  }
+  text(): string {
+    return this.chunks.join("");
+  }
+}
+
+// --- mode resolution ---------------------------------------------------------------
+
+test("resolveRunMode: bare interactive attaches; any capture detaches", () => {
+  const env = {};
+  const both = { stdoutTTY: true, stderrTTY: true };
+  assert.deepEqual(resolveRunMode({}, both, env), { mode: "attach" });
+  // RUN=$(odw run …): stdout captured, stderr still a terminal — must detach.
+  assert.deepEqual(resolveRunMode({}, { stdoutTTY: false, stderrTTY: true }, env), {
+    mode: "detach",
+  });
+  assert.deepEqual(resolveRunMode({}, { stdoutTTY: true, stderrTTY: false }, env), {
+    mode: "detach",
+  });
+});
+
+test("resolveRunMode: CI and ODW_DETACH force detach; explicit flags beat both", () => {
+  const both = { stdoutTTY: true, stderrTTY: true };
+  assert.deepEqual(resolveRunMode({}, both, { CI: "true" }), { mode: "detach" });
+  assert.deepEqual(resolveRunMode({}, both, { ODW_DETACH: "1" }), { mode: "detach" });
+  assert.deepEqual(resolveRunMode({}, both, { CI: "false" }), { mode: "attach" });
+  assert.deepEqual(resolveRunMode({ fg: true }, both, { ODW_DETACH: "1" }), { mode: "attach" });
+  assert.deepEqual(resolveRunMode({ wait: true }, both, { CI: "1" }), { mode: "wait" });
+});
+
+test("resolveRunMode: conflicting flags are a usage error", () => {
+  const both = { stdoutTTY: true, stderrTTY: true };
+  const r = resolveRunMode({ fg: true, detach: true }, both, {});
+  assert.ok("usageError" in r && r.usageError.includes("--fg"));
+  assert.ok("usageError" in resolveRunMode({ wait: true, detach: true }, both, {}));
+});
+
+// --- incremental event reader --------------------------------------------------------
+
+test("readEventsSince advances only past complete lines and survives truncation", () => {
+  const store = freshStore();
+  const runId = makeRun(store);
+  const path = store.eventsPath(runId);
+
+  let cur = { offset: 0 };
+  appendFileSync(path, JSON.stringify({ ts: 1, type: "run_started" }) + "\n");
+  let r = store.readEventsSince(runId, cur);
+  assert.equal(r.events.length, 1);
+  cur = r.cursor;
+
+  // A torn tail (no newline yet) is not consumed…
+  appendFileSync(path, '{"ts":2,"type":"log","mess');
+  r = store.readEventsSince(runId, cur);
+  assert.equal(r.events.length, 0);
+  assert.equal(r.cursor.offset, cur.offset);
+
+  // …and is delivered whole once the writer finishes the line.
+  appendFileSync(path, 'age":"hi"}\n' + JSON.stringify({ ts: 3, type: "log", message: "中文" }) + "\n");
+  r = store.readEventsSince(runId, cur);
+  assert.deepEqual(
+    r.events.map((e) => e.ts),
+    [2, 3],
+  );
+  cur = r.cursor;
+
+  // A replaced/truncated file resets the cursor instead of hanging.
+  writeFileSync(path, JSON.stringify({ ts: 9, type: "run_started" }) + "\n");
+  r = store.readEventsSince(runId, cur);
+  assert.deepEqual(
+    r.events.map((e) => e.ts),
+    [9],
+  );
+});
+
+test("readEventsSince: a REPLACED file that outgrew the old offset is re-read from 0", () => {
+  const store = freshStore();
+  const runId = makeRun(store);
+  const path = store.eventsPath(runId);
+
+  appendFileSync(path, JSON.stringify({ ts: 1, type: "run_started" }) + "\n");
+  let cur = store.readEventsSince(runId, { offset: 0 }).cursor;
+
+  // Replace the file wholesale (new inode) with MORE bytes than the old offset:
+  // a size-only check would silently read from the middle of the new file.
+  rmSync(path);
+  const lines = [
+    JSON.stringify({ ts: 10, type: "run_started" }),
+    JSON.stringify({ ts: 11, type: "log", message: "padding so the new file is longer" }),
+  ];
+  writeFileSync(path, lines.join("\n") + "\n");
+  const r = store.readEventsSince(runId, cur);
+  assert.deepEqual(
+    r.events.map((e) => e.ts),
+    [10, 11],
+  );
+});
+
+// --- live attach: happy path ----------------------------------------------------------
+
+test("attachRun (live): scrollback narrates phases/agents and pairing uses agentId", async () => {
+  const store = freshStore();
+  const runId = makeRun(store, "fg-demo");
+  const term = new FakeTerm(100);
+  const out = new Collector();
+
+  emit(store, runId, { ts: 100, type: "run_started", runId });
+  emit(store, runId, { ts: 100, type: "phase_started", phase: "Gather" });
+  emit(store, runId, { ts: 100, type: "log", message: "fanning out" });
+  emit(store, runId, { ts: 100, type: "agent_started", agentId: 1, label: "search", phase: "Gather", adapter: "fake" });
+  emit(store, runId, { ts: 101, type: "agent_started", agentId: 2, label: "search", phase: "Gather", adapter: "fake" });
+
+  const done = attachRun(store, runId, {
+    out,
+    err: term,
+    live: true,
+    pollMs: 10,
+    signals: false,
+    env: ENV,
+  });
+
+  await sleep(50);
+  // agent 2 finishes FIRST. Legacy label-pairing would misattribute this to
+  // agent 1 (the older node); agentId pairing must credit agent 2 (0.5s).
+  emit(store, runId, { ts: 101.5, type: "agent_finished", agentId: 2, label: "search", phase: "Gather", adapter: "fake", attempts: 1 });
+  emit(store, runId, { ts: 104, type: "agent_finished", agentId: 1, label: "search", phase: "Gather", adapter: "fake", attempts: 2 });
+  emit(store, runId, { ts: 104, type: "phase_started", phase: "Reduce" });
+  emit(store, runId, { ts: 104, type: "agent_started", agentId: 3, label: "reduce", phase: "Reduce", adapter: "fake" });
+  await sleep(40);
+  emit(store, runId, { ts: 105, type: "agent_finished", agentId: 3, label: "reduce", phase: "Reduce", adapter: "fake", attempts: 1 });
+  emit(store, runId, { ts: 105, type: "run_finished", runId });
+  store.writeResult(runId, { answer: 42 });
+  store.updateStatus(runId, { state: "done", spentTokens: 12 });
+
+  assert.equal(await done, 0);
+  const screen = term.text();
+
+  assert.match(screen, /◆ fg-demo/);
+  assert.match(screen, new RegExp(runId));
+  assert.match(screen, /Gather ─+/);
+  assert.match(screen, /· fanning out/);
+  assert.match(screen, /Reduce ─+/);
+  // agentId pairing: the first settled line carries agent 2's 0.5s, not 3.5s.
+  const settleOrder = screen.match(/✔ search.*\n.*✔ search.*/s);
+  assert.ok(settleOrder, "both search agents settle in the scrollback");
+  assert.match(screen, /✔ search\s+.*0\.5s/);
+  assert.match(screen, /✔ search\s+.*4\.0s.*2 tries/);
+  assert.match(screen, /✔ reduce/);
+  assert.match(screen, /✔ done\s+.*3 agents.*~12 tok/);
+  // the active block is gone from the final screen; cursor restored
+  assert.doesNotMatch(screen, /running/);
+  assert.equal(term.hiddenCursor, false);
+  // stdout carries exactly the result JSON
+  assert.deepEqual(JSON.parse(out.text()), { answer: 42 });
+});
+
+// --- live attach: failure -------------------------------------------------------------
+
+test("attachRun (live): a failed run paints the error and exits 1", async () => {
+  const store = freshStore();
+  const runId = makeRun(store, "boom");
+  const term = new FakeTerm(100);
+  const out = new Collector();
+
+  emit(store, runId, { ts: 10, type: "run_started", runId });
+  emit(store, runId, { ts: 10, type: "agent_started", agentId: 1, label: "job", adapter: "fake" });
+
+  const done = attachRun(store, runId, {
+    out,
+    err: term,
+    live: true,
+    pollMs: 10,
+    signals: false,
+    env: ENV,
+  });
+  await sleep(40);
+  emit(store, runId, { ts: 11, type: "agent_failed", agentId: 1, label: "job", error: "exploded badly" });
+  emit(store, runId, { ts: 11, type: "run_failed", runId });
+  store.writeError(runId, { error: "exploded badly" });
+  store.updateStatus(runId, { state: "failed" });
+
+  assert.equal(await done, 1);
+  const screen = term.text();
+  assert.match(screen, /✖ job/);
+  assert.match(screen, /exploded badly/);
+  assert.match(screen, /✖ failed/);
+  assert.equal(out.text(), ""); // no result JSON on stdout for a failed run
+});
+
+test("attachRun: a run_finished event with a stuck status still settles as done", async () => {
+  const store = freshStore();
+  const runId = makeRun(store, "stuck");
+  const term = new FakeTerm(100);
+  const out = new Collector();
+
+  emit(store, runId, { ts: 1, type: "run_started", runId });
+  emit(store, runId, { ts: 2, type: "run_finished", runId });
+  store.writeResult(runId, "late");
+  // status.state stays "running" forever — the worker died between writes.
+
+  const code = await attachRun(store, runId, {
+    out,
+    err: term,
+    live: true,
+    pollMs: 20,
+    signals: false,
+    env: ENV,
+  });
+  assert.equal(code, 0);
+  assert.match(term.text(), /status never settled/);
+  assert.equal(JSON.parse(out.text()), "late");
+});
+
+test("attachRun: workflow-controlled run names are sanitized before the header", async () => {
+  const store = freshStore();
+  const runId = makeRun(store, "evil\x1b]0;pwned\x07name");
+  const term = new FakeTerm(100);
+  emit(store, runId, { ts: 1, type: "run_finished", runId });
+  store.writeResult(runId, null);
+  store.updateStatus(runId, { state: "done" });
+  await attachRun(store, runId, {
+    out: new Collector(),
+    err: term,
+    live: true,
+    pollMs: 10,
+    signals: false,
+    env: ENV,
+  });
+  assert.doesNotMatch(term.raw, /\x1b\]0;/); // the OSC never reaches the terminal
+  assert.match(term.text(), /evilname/);
+});
+
+test("attachRun: TERM=dumb never enters the live renderer (no cursor CSI at all)", async () => {
+  const store = freshStore();
+  const runId = makeRun(store, "dumb");
+  const term = new FakeTerm(80);
+  emit(store, runId, { ts: 1, type: "run_finished", runId });
+  store.writeResult(runId, 1);
+  store.updateStatus(runId, { state: "done" });
+  const code = await attachRun(store, runId, {
+    out: new Collector(),
+    err: term,
+    pollMs: 10,
+    signals: false,
+    env: { TERM: "dumb" },
+  });
+  assert.equal(code, 0);
+  assert.doesNotMatch(term.raw, /\x1b\[\?25l/);
+  assert.doesNotMatch(term.raw, /\x1b\[0J/);
+});
+
+// --- timeout & detach -------------------------------------------------------------------
+
+test("attachRun: --timeout exits 124 and says the run continues", async () => {
+  const store = freshStore();
+  const runId = makeRun(store);
+  const term = new FakeTerm(100);
+  const code = await attachRun(store, runId, {
+    out: new Collector(),
+    err: term,
+    live: true,
+    pollMs: 10,
+    timeoutMs: 80,
+    signals: false,
+    env: ENV,
+  });
+  assert.equal(code, 124);
+  assert.match(term.text(), /timed out after 0s — run continues \(odw attach/);
+  assert.equal(term.hiddenCursor, false);
+});
+
+test("attachRun: SIGINT detaches with 130 and the run is untouched", async () => {
+  const store = freshStore();
+  const runId = makeRun(store);
+  const term = new FakeTerm(100);
+  const done = attachRun(store, runId, {
+    out: new Collector(),
+    err: term,
+    live: true,
+    pollMs: 10,
+    signals: true,
+    env: ENV,
+  });
+  await sleep(30);
+  (process as unknown as { emit(e: string): boolean }).emit("SIGINT");
+  assert.equal(await done, 130);
+  assert.match(term.text(), /detached — run continues in the background/);
+  assert.equal(String(store.readStatus(runId).state), "running");
+  assert.equal(term.hiddenCursor, false);
+});
+
+// --- line mode (non-TTY --fg) --------------------------------------------------------------
+
+test("attachRun (line mode): plain sanitized lines, result on stdout, zero ANSI", async () => {
+  const store = freshStore();
+  const runId = makeRun(store, "plain");
+  const err = new Collector();
+  const out = new Collector();
+
+  emit(store, runId, { ts: 1, type: "run_started", runId });
+  emit(store, runId, { ts: 1, type: "agent_started", agentId: 1, label: "evil\x1b]0;pwn\x07label", adapter: "fake" });
+
+  const done = attachRun(store, runId, { out, err, live: false, pollMs: 10, signals: false, env: {} });
+  await sleep(30);
+  emit(store, runId, { ts: 2, type: "agent_finished", agentId: 1, label: "evil\x1b]0;pwn\x07label", adapter: "fake", attempts: 1 });
+  emit(store, runId, { ts: 2, type: "run_finished", runId });
+  store.writeResult(runId, "ok");
+  store.updateStatus(runId, { state: "done" });
+
+  assert.equal(await done, 0);
+  const logs = err.text();
+  assert.match(logs, /agent_started/);
+  assert.match(logs, /evillabel/); // OSC payload stripped, text kept
+  assert.doesNotMatch(logs, /\x1b/);
+  assert.equal(JSON.parse(out.text()), "ok");
+});
+
+// --- vanished run ----------------------------------------------------------------------------
+
+test("attachRun: a deleted run directory exits 1 instead of spinning forever", async () => {
+  const store = freshStore();
+  const runId = makeRun(store);
+  rmSync(store.runDir(runId), { recursive: true, force: true });
+  const term = new FakeTerm(80);
+  const code = await attachRun(store, runId, {
+    out: new Collector(),
+    err: term,
+    live: true,
+    pollMs: 10,
+    signals: false,
+    env: ENV,
+  });
+  assert.equal(code, 1);
+  assert.match(term.text(), /unreadable/);
+});

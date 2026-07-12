@@ -26,7 +26,7 @@ agent(prompt, opts?) -> Promise<string | object>
   ——运行日志里会出现一条路由说明。model id 不能跨 CLI 通用。
 - **opts.agentType** —— 注入进 prompt 的**人设**（如 `"code-reviewer"`），因此在任何 CLI
   上都生效。它**不是** adapter 名，永远不影响 adapter 选择——只有 `opts.adapter` 才会。
-- **opts.isolation** —— `"worktree"` 表示请求隔离；由默认的 copy 隔离工作区满足。
+- **opts.isolation** —— `"worktree"` 给这个 agent 一个一次性 **git worktree**（默认工作区就是 source 目录本身）。要求 source 是有提交的 git 仓库；agent 看到 HEAD，其改动以 diff 返回。
 
 返回回复文本，设了 `schema` 则返回校验过的对象。硬失败时抛错（CLI 出错，或 schema 始终
 没通过校验）。**在 `parallel`/`pipeline` 内部，抛错的调用会变成一个 `null` 槽位，而不是

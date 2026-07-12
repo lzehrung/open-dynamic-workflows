@@ -13,7 +13,6 @@ function ok(stdout: string): CliResult {
 function inplaceConfig() {
   const cfg = defaultConfig();
   cfg.settings.defaultAdapter = "claude";
-  cfg.settings.workspaceMode = "inplace";
   return cfg;
 }
 

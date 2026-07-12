@@ -1,47 +1,89 @@
 /**
- * Workspace isolation and diff capture (cross-cutting).
+ * Workspace isolation via git worktrees (cross-cutting).
  *
  * Each `agent` call runs against a *workspace*. Two modes:
- *   - `copy` (default): the source tree is copied to a throwaway directory, the
- *     agent runs there, and its changes are returned as a unified diff. The
- *     caller's real working tree is never touched.
- *   - `inplace`: the agent runs directly in the source directory, no diff. The
- *     right choice for read-only / analysis workflows (e.g. deep-research).
+ *   - `inplace` (default): the agent runs directly in the source directory —
+ *     the same semantics as Claude Code's Workflow tool subagents. No isolation,
+ *     no diff.
+ *   - `worktree` (per-agent opt-in via `isolation: "worktree"`): the agent runs
+ *     in a throwaway `git worktree` of the source repository — again the same
+ *     mechanism Claude Code uses. Worktrees share the repo's object store, so
+ *     setup is near-free regardless of tree size. The agent's changes come back
+ *     as a unified diff against the commit the worktree started from — staging
+ *     or even committing inside the worktree does not hide work — and the
+ *     worktree is removed afterwards; the diff is the artifact.
+ *
+ * Known properties of the git mechanism (shared with Claude Code's worktrees):
+ *   - the source must be a git repository with at least one commit; asking for
+ *     isolation elsewhere fails that agent call with an actionable error
+ *   - the worktree is a clean checkout of the base commit — the agent sees the
+ *     last commit, not any uncommitted edits in the source tree
+ *   - submodules are NOT initialised (their directories are empty), and
+ *     absolute symlinks are checked out verbatim — a link that points back
+ *     into the source tree escapes the isolation if the agent writes through it
  */
 
-import { cp, mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { closeSync, openSync, readSync } from "node:fs";
+import { mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join, relative, resolve, sep } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
+import { promisify } from "node:util";
 
-import { unifiedDiff } from "./diff.js";
+const run = promisify(execFile);
 
-export type WorkspaceMode = "copy" | "inplace";
+export type WorkspaceMode = "inplace" | "worktree";
 
 export interface Workspace {
   /** Directory the agent runs in. */
   path: string;
   /** The original source tree. */
   source: string;
-  /** Unified diff of text changes since the workspace opened (empty for inplace). */
+  /** Unified diff of the agent's changes (empty for inplace). */
   diff(): Promise<string>;
 }
 
-/** Directories never worth copying into an isolated workspace. */
-const IGNORED_DIRS = new Set([
-  ".git",
-  ".venv",
-  "venv",
-  "__pycache__",
-  "node_modules",
-  "dist",
-  "build",
-  ".pytest_cache",
-  ".ruff_cache",
-]);
-/** Files larger than this are copied but skipped in the textual diff. */
-const MAX_DIFF_BYTES = 512 * 1024;
+/** Everything the runner captures from git directly is small; diffs go to a file. */
+const GIT_MAX_BUFFER = 4 * 1024 * 1024;
+/** Diffs beyond this are truncated with a marker (nothing downstream wants 1 GiB). */
+const DIFF_CAP_BYTES = 32 * 1024 * 1024;
 
-/** Open a workspace, run `fn` inside it, then clean up (copy mode only). */
+async function git(dir: string, args: string[]): Promise<string> {
+  const { stdout } = await run("git", ["-C", dir, ...args], { maxBuffer: GIT_MAX_BUFFER });
+  return stdout;
+}
+
+function gitDetail(err: unknown): string {
+  return (err as { stderr?: string }).stderr?.trim() || (err as Error).message;
+}
+
+/** Read at most `cap` bytes of `path`, appending a truncation marker if cut. */
+async function readCapped(path: string, cap: number): Promise<string> {
+  const info = await stat(path);
+  if (info.size <= cap) {
+    const fd = openSync(path, "r");
+    try {
+      const buf = Buffer.alloc(info.size);
+      const n = readSync(fd, buf, 0, buf.length, 0);
+      return buf.subarray(0, n).toString("utf8");
+    } finally {
+      closeSync(fd);
+    }
+  }
+  const fd = openSync(path, "r");
+  try {
+    const buf = Buffer.alloc(cap);
+    const n = readSync(fd, buf, 0, cap, 0);
+    return (
+      buf.subarray(0, n).toString("utf8") +
+      `\n... [diff truncated: ${info.size} bytes total, first ${cap} shown]\n`
+    );
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Open a workspace, run `fn` inside it, then clean up (worktree mode only). */
 export async function withWorkspace<T>(
   source: string,
   mode: WorkspaceMode,
@@ -50,88 +92,72 @@ export async function withWorkspace<T>(
   if (mode === "inplace") {
     return fn({ path: source, source, diff: async () => "" });
   }
-  if (mode !== "copy") {
-    throw new Error(`unknown workspace mode '${mode}'; use 'copy' or 'inplace'`);
+  if (mode !== "worktree") {
+    throw new Error(`unknown workspace mode '${mode}'; use 'inplace' or 'worktree'`);
   }
 
-  const tmp = await mkdtemp(join(tmpdir(), "odw-ws-"));
-  const work = join(tmp, basename(source));
-  // The workspace temp dir lives under the OS temp root. If `source` is the
-  // filesystem root (or any ancestor of the temp root — e.g. when the desktop
-  // app spawns the sidecar with cwd `/` and a run inherits source `/`), copying
-  // it would try to copy a directory into its own subtree. node's fs.cp refuses
-  // that with a cryptic ERR_FS_CP_EINVAL; pre-empt it with an actionable error
-  // (and never attempt to copy the entire filesystem).
-  const absSource = resolve(source);
-  const absWork = resolve(work);
-  if (absWork === absSource || absWork.startsWith(absSource.endsWith(sep) ? absSource : absSource + sep)) {
+  // Resolve the repo first so "not a repo / no commits" gets its own targeted
+  // message, and a later `worktree add` failure (LFS, filters, permissions)
+  // reports git's actual complaint instead of misleading init advice.
+  let top: string;
+  let base: string;
+  try {
+    top = (await git(source, ["rev-parse", "--show-toplevel"])).trim();
+    base = (await git(source, ["rev-parse", "--verify", "HEAD"])).trim();
+  } catch (err) {
     throw new Error(
-      `cannot copy-isolate from '${source}': it contains the temp workspace, so copy mode would ` +
-        `copy a directory into itself. Choose a project subdirectory, or set workspaceMode: "inplace".`,
+      `isolation "worktree" needs a git repository with at least one commit at '${source}' ` +
+        `(agents are isolated via git worktrees, as in Claude Code). ` +
+        `Run without isolation, or initialise the repo first. git said: ${gitDetail(err)}`,
     );
   }
+
+  const tmp = await mkdtemp(join(tmpdir(), "odw-wt-"));
+  const work = join(tmp, basename(top));
   try {
-    await cp(source, work, {
-      recursive: true,
-      // Apply the ignore list only below the root — never to the root itself,
-      // even if the source dir's own name happens to be an ignored name.
-      filter: (src) => src === source || !IGNORED_DIRS.has(basename(src)),
-    });
-    const before = await snapshot(work);
-    const ws: Workspace = {
-      path: work,
-      source,
-      diff: async () => computeDiff(before, await snapshot(work)),
-    };
+    // Pin the worktree to the resolved base commit: immune to concurrent HEAD
+    // movement, and the later diff is taken against this exact baseline.
+    await git(top, ["worktree", "add", "--detach", work, base]);
+  } catch (err) {
+    await rm(tmp, { recursive: true, force: true });
+    throw new Error(`could not create an isolated git worktree from '${top}': ${gitDetail(err)}`);
+  }
+
+  // The worktree mirrors the REPO root; the agent's workspace is the source's
+  // corresponding subdirectory inside it (`--source repo/packages/foo` must not
+  // silently promote the agent to the repo root). realpath BOTH sides: git
+  // reports the resolved toplevel while `source` may arrive through a symlink
+  // (macOS /tmp, /var), and a mismatched `relative()` would escape the worktree.
+  const rel = relative(await realpath(top), await realpath(resolve(source)));
+  const wsPath = rel === "" || rel.startsWith("..") ? work : join(work, rel);
+
+  const ws: Workspace = {
+    path: wsPath,
+    source,
+    diff: async () => {
+      // Intent-to-add stages the *paths* of brand-new files (respecting
+      // .gitignore) so they appear in the diff; diffing against the pinned
+      // base commit keeps staged and even committed work visible.
+      await git(work, ["add", "--all", "--intent-to-add", "."]);
+      const out = join(tmp, "odw-diff.patch");
+      // --output writes to a file: no stdout buffer to overflow, any size.
+      await git(work, ["diff", base, `--output=${out}`]);
+      return readCapped(out, DIFF_CAP_BYTES);
+    },
+  };
+  try {
     return await fn(ws);
   } finally {
-    await rm(tmp, { recursive: true, force: true });
-  }
-}
-
-// --- internals ---------------------------------------------------------------
-
-/** Map each small text file (path relative to `root`) to its contents. */
-async function snapshot(root: string): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
-  async function walk(dir: string): Promise<void> {
-    let entries;
+    // An agent may have locked its worktree; unlock (best-effort), then
+    // remove with double --force (dirty AND locked); if git still refuses,
+    // delete the tree and prune the stale registration.
+    await git(top, ["worktree", "unlock", work]).catch(() => {});
     try {
-      entries = await readdir(dir, { withFileTypes: true });
+      await git(top, ["worktree", "remove", "--force", "--force", work]);
     } catch {
-      return;
+      await rm(tmp, { recursive: true, force: true }).catch(() => {});
+      await git(top, ["worktree", "prune"]).catch(() => {});
     }
-    for (const entry of entries) {
-      if (entry.isSymbolicLink()) continue;
-      const full = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (IGNORED_DIRS.has(entry.name)) continue;
-        await walk(full);
-        continue;
-      }
-      if (!entry.isFile()) continue;
-      try {
-        const info = await stat(full);
-        if (info.size > MAX_DIFF_BYTES) continue;
-        const text = await readFile(full, "utf8");
-        out.set(relative(root, full), text);
-      } catch {
-        continue; // unreadable or binary: copied, but not diffed
-      }
-    }
+    await rm(tmp, { recursive: true, force: true }).catch(() => {});
   }
-  await walk(root);
-  return out;
-}
-
-function computeDiff(before: Map<string, string>, after: Map<string, string>): string {
-  const rels = [...new Set([...before.keys(), ...after.keys()])].sort();
-  let out = "";
-  for (const rel of rels) {
-    const oldText = before.get(rel) ?? "";
-    const newText = after.get(rel) ?? "";
-    if (oldText === newText) continue;
-    out += unifiedDiff(oldText, newText, `a/${rel}`, `b/${rel}`);
-  }
-  return out;
 }

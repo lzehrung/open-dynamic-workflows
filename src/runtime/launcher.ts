@@ -177,7 +177,9 @@ export async function waitFor(
   runId: string,
   options: { timeoutMs?: number; pollIntervalMs?: number } = {},
 ): Promise<Record<string, unknown>> {
-  const deadline = options.timeoutMs ? Date.now() + options.timeoutMs : null;
+  // `!== undefined` (not truthiness): `--timeout 0` means "time out immediately",
+  // never "wait forever".
+  const deadline = options.timeoutMs !== undefined ? Date.now() + options.timeoutMs : null;
   const poll = options.pollIntervalMs ?? 200;
   for (;;) {
     const status = store.readStatus(runId);

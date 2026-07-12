@@ -1,45 +1,112 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { withWorkspace } from "../src/workspace.js";
 
-function makeSource(): string {
+function git(dir: string, ...args: string[]): string {
+  return execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" });
+}
+
+/** A one-commit repo with a.txt — the smallest worktree-able source. */
+function makeRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), "odw-src-"));
   writeFileSync(join(dir, "a.txt"), "line1\nline2\n");
+  git(dir, "init", "-q");
+  git(dir, "add", "-A");
+  git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--no-gpg-sign", "-m", "init");
   return dir;
 }
 
-test("copy mode isolates the tree and diffs the agent's changes", async () => {
-  const src = makeSource();
+test("worktree mode isolates via a real git worktree and diffs edits AND new files", async () => {
+  const src = makeRepo();
   try {
-    const diff = await withWorkspace(src, "copy", async (ws) => {
-      assert.notEqual(ws.path, src, "copy must run in a separate directory");
+    const diff = await withWorkspace(src, "worktree", async (ws) => {
+      assert.notEqual(ws.path, src, "worktree must be a separate directory");
+      assert.ok(existsSync(join(ws.path, "a.txt")), "worktree has the committed tree");
       await writeFile(join(ws.path, "a.txt"), "line1\nCHANGED\n");
+      await writeFile(join(ws.path, "brand-new.txt"), "hello\n");
+      // Agents habitually stage and even commit — that must not hide work,
+      // because the diff is taken against the pinned base commit.
+      git(ws.path, "add", "a.txt");
+      git(ws.path, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--no-gpg-sign", "-m", "agent commit");
       return ws.diff();
     });
     assert.match(diff, /a\/a\.txt/);
-    assert.match(diff, /^-line2$/m);
     assert.match(diff, /^\+CHANGED$/m);
-    // the real source tree must be untouched
+    // intent-to-add makes brand-new files part of the diff too
+    assert.match(diff, /brand-new\.txt/);
+    assert.match(diff, /^\+hello$/m);
+    // the real source tree is untouched, and the worktree is gone from git
     assert.equal(await readFile(join(src, "a.txt"), "utf8"), "line1\nline2\n");
+    const worktrees = git(src, "worktree", "list", "--porcelain");
+    assert.equal(worktrees.trim().split("\n\n").length, 1, "only the main worktree remains");
   } finally {
     rmSync(src, { recursive: true, force: true });
   }
 });
 
-test("inplace mode runs in the source and yields no diff", async () => {
-  const src = makeSource();
+test("worktree mode maps a repo SUBDIRECTORY source to the matching subdir", async () => {
+  const src = makeRepo();
+  const sub = join(src, "packages", "foo");
   try {
-    const out = await withWorkspace(src, "inplace", async (ws) => {
-      assert.equal(ws.path, src);
+    mkdirSync(sub, { recursive: true });
+    writeFileSync(join(sub, "f.txt"), "sub\n");
+    git(src, "add", "-A");
+    git(src, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--no-gpg-sign", "-m", "sub");
+    const diff = await withWorkspace(sub, "worktree", async (ws) => {
+      assert.ok(ws.path.endsWith(join("packages", "foo")), `agent lands in the subdir, got ${ws.path}`);
+      assert.ok(existsSync(join(ws.path, "f.txt")));
+      await writeFile(join(ws.path, "f.txt"), "edited\n");
+      return ws.diff();
+    });
+    assert.match(diff, /packages\/foo\/f\.txt/);
+    assert.equal(await readFile(join(sub, "f.txt"), "utf8"), "sub\n");
+  } finally {
+    rmSync(src, { recursive: true, force: true });
+  }
+});
+
+test("a worktree the agent LOCKED is still cleaned up completely", async () => {
+  const src = makeRepo();
+  try {
+    await withWorkspace(src, "worktree", async (ws) => {
+      git(src, "worktree", "lock", ws.path);
+      return null;
+    });
+    const worktrees = git(src, "worktree", "list", "--porcelain");
+    assert.equal(worktrees.trim().split("\n\n").length, 1, "no stale locked registration");
+  } finally {
+    rmSync(src, { recursive: true, force: true });
+  }
+});
+
+test("worktree mode on a non-git directory fails with an actionable error", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "odw-plain-"));
+  try {
+    await assert.rejects(
+      withWorkspace(dir, "worktree", async () => "unreachable"),
+      /needs a git repository/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("inplace mode runs in the source and yields no diff", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "odw-plain-"));
+  writeFileSync(join(dir, "a.txt"), "x\n");
+  try {
+    const out = await withWorkspace(dir, "inplace", async (ws) => {
+      assert.equal(ws.path, dir);
       return ws.diff();
     });
     assert.equal(out, "");
   } finally {
-    rmSync(src, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true });
   }
 });
