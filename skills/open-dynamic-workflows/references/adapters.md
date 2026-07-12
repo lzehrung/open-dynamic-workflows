@@ -15,10 +15,14 @@ The templates are intentionally conservative, and the built-ins are **not**
 equally privileged:
 
 - `codex` runs with `--sandbox workspace-write`: it can **edit files and run
-  commands** inside its workspace out of the box.
-- `claude` runs with `--permission-mode acceptEdits`: it can **edit files but
-  not run commands** (a prompt that asks it to execute something will stall or
-  be refused). To let Claude run commands too, override the adapter with
+  commands** inside its workspace out of the box. It also carries `--search`,
+  so it can **search the web** natively.
+- `claude` runs with `--permission-mode acceptEdits` plus
+  `--allowedTools WebSearch WebFetch`: it can **edit files and use the web**,
+  but **not run commands** (a prompt that asks it to execute something will
+  stall or be refused). The web allowlist matters: headless acceptEdits
+  silently denies WebSearch/WebFetch otherwise, which breaks research
+  workflows like `examples/deep-research.js`. To let Claude run commands too, override the adapter with
   `--dangerously-skip-permissions` — which has **no sandbox**, so do that only
   against a throwaway `--source` directory, never your real repo:
 
