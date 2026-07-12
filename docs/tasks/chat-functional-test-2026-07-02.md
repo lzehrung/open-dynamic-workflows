@@ -289,3 +289,74 @@
   - 否定语义不触发 run。
   - phase-only bridge run done 时 progress 语义。
   - localized/system message strategy 一旦确定后补 contract test。
+
+## 5. 证券 ETF / RW 端到端复测
+
+测试时间：2026-07-02 22:29-22:35，Asia/Shanghai。
+
+测试会话：`chat_mr3kyy3s-wi3c7e`。
+
+测试任务：
+
+```text
+请用 ODW workflow / RW 跑一个简单任务：调研一下 A 股证券 ETF，给出 3-5 只主要产品、核心区别、适用场景和风险提示。请把调研正文作为 ODW 结果返回。
+```
+
+### 5.1 结果结论
+
+- 新 run：`20260702-222925-2f598a`。
+- 旧 run：`20260702-220957-42ba04`，仍是修复前产生的占位结果；本次只作为历史对照。
+- 新 run 走到了真实 `agent()` 调用，`workflow.js` 中不再是硬编码 `{summary, prompt, sessionId}`。
+- 新 run 最终 `done`，耗时约 329 秒。
+- `/api/runs/20260702-222925-2f598a/result` 返回了真实调研正文，长度约 1566 字符，包含产品表、核心区别、适用场景、风险提示和来源链接。
+- `/api/chat/sessions/chat_mr3kyy3s-wi3c7e` 自动追加了 `kind: "chat.odw_result"` 的 user message。
+- ODW result 回灌后，Codex follow-up 被自动触发，并最终 `status: "done"`。
+- 浏览器 DOM 中能看到新 run id、`A 股证券 ETF 简要调研` 正文和 `ODW / RW 已完成` follow-up。
+
+### 5.2 关键证据
+
+run event：
+
+```text
+run_started -> phase Capture -> phase Execute -> agent_started(codex) -> agent_finished -> phase Return -> run_finished
+```
+
+result 摘要：
+
+```text
+# A 股证券 ETF 简要调研
+
+产品覆盖：512880 证券ETF国泰、512000 券商ETF华宝、159841 证券ETF天弘、159993 证券ETF鹏华、515010 证券ETF华夏。
+内容覆盖：跟踪指数、规模、费率、核心区别、适用场景、风险提示、来源链接。
+```
+
+### 5.3 UI 回归
+
+- 消息区在 run 完成后保持贴底：`nearBottom: true`。
+- 将 `.chat-messages` 滚到中间后等待超过两个轮询周期，`scrollTop` 从 `2566` 到 `2566`，未回跳。
+- 再滚到底部等待轮询，仍保持底部。
+- 输入框填入 `测试中文输入中` 后等待超过两个轮询周期，输入值保留，焦点仍在 `#chat-input`。
+- 说明：程序化测试只能覆盖输入值和焦点保留；真实中文 IME composition 仍建议人工再手测一次。
+
+### 5.4 新观察点
+
+### CH-10：运行中缺少可见中间进度，长任务容易被误判为卡住
+
+严重级别：P3
+
+现象：
+
+- 本次证券 ETF 任务从 `agent_started` 到 `agent_finished` 约 329 秒。
+- 期间 `events.jsonl` 没有新事件，`worker.log` 为 0 字节。
+- UI 只能显示 tool card `running`，没有 CLI stderr/stdout、心跳、耗时、预计超时或“Codex 子进程仍在运行”的解释。
+- 直接 `codex exec` 和同 temp workspace 的短探针都能在 10 秒内返回，说明不是 CLI 启动挂死，而是长 agent 调用期间缺少可见进度。
+
+预期结果：
+
+- 长任务 running 状态应显示已运行时长和最后一次事件时间。
+- 如果 stdout/stderr 只能在子进程结束后进入内存，也应至少发心跳事件或展示 adapter timeout。
+- 可考虑在 tool card 上提示“正在等待 Codex 子进程返回，最长超时 1800s”。
+
+建议拆 Issue 标题：
+
+- `ux(chat): show heartbeat and elapsed time while a Chat ODW agent is running`
