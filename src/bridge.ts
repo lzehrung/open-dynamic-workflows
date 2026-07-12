@@ -3,7 +3,8 @@
  *
  * Given an {@link AgentRequest} it: resolves the adapter, composes a
  * self-contained prompt (independence framing + optional schema instructions),
- * runs the adapter in an isolated workspace, and — when a schema is requested —
+ * runs the adapter in its workspace (the source tree by default, a throwaway
+ * copy when isolation is requested), and — when a schema is requested —
  * extracts/validates the reply and retries with corrective feedback until it
  * conforms or the retry budget is spent.
  *

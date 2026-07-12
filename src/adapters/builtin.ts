@@ -83,7 +83,10 @@ export const DEFAULT_SETTINGS: Settings = {
   defaultAdapter: null, // falls back to the sole adapter, or must be chosen
   concurrency: null, // null => auto (min(16, cpus - 2))
   maxAgents: 1000, // runaway guard on total dispatches per run
-  workspaceMode: "copy", // "copy" (isolated) or "inplace"
+  // Agents work directly in the run's source directory — the same semantics as
+  // Claude Code's Workflow tool subagents. Isolation is opt-in: per agent via
+  // isolation: "worktree", or globally with "copy" here.
+  workspaceMode: "inplace",
   timeout: 1800, // per-agent CLI timeout, seconds
   schemaRetries: 2, // extra attempts when a schema fails to validate
   runsRoot: null, // null => ~/.odw/runs

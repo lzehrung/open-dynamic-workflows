@@ -103,7 +103,7 @@ odw result "$RUN"
 - `context`：相关文件、仓库事实、已有发现或用户偏好。
 - `finalFormat`：最终综合结果的格式要求。
 
-保持 ODW 默认隔离模式，除非用户明确要求共享的就地执行并接受风险。意外变大的运行用
+ultra-mode 的 lane 显式请求隔离（`isolation: "worktree"`），改动落在一次性副本里——请保持这一点，除非用户明确要求共享的就地执行（ODW 的默认行为）并接受风险。意外变大的运行用
 `odw stop <run_id>` 停止，或用 `odw pause <run_id>` 暂停。
 
 ## 串行退化方案

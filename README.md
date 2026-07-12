@@ -457,8 +457,8 @@ workflows, not to be the orchestration.
 
 Those orchestrate API calls and custom nodes. ODW orchestrates <b>coding-agent
 CLIs</b> — the agents you already pay for and configure (Codex, Claude Code,
-Gemini, …) — in their own working directories, with workspace isolation and
-diffs. There is no DSL and no server farm: a workflow is one plain JavaScript
+Gemini, …) — in the run's own working directory, with opt-in per-agent
+workspace isolation and diffs. There is no DSL and no server farm: a workflow is one plain JavaScript
 file in Claude Code's existing dialect, and the engine is a zero-dependency
 Node CLI.
 </details>

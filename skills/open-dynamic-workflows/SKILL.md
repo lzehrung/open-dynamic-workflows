@@ -129,10 +129,12 @@ read [`references/adapters.md`](references/adapters.md) and write an
 
 - **Isolation**: agents run independently and never see each other — unless
   the script feeds one's output into another's prompt.
-- **Workspace**: by default each agent runs in an isolated copy of the working
-  tree (copy mode); the real tree is never modified. `inplace` mode has no
-  isolation and no diff — use it only when you actually want in-place edits
-  and `--source` points at a directory you can afford to break.
+- **Workspace**: agents run directly in the run's source directory (`--source`,
+  default the current directory) — the same semantics as Claude Code's own
+  Workflow tool. For isolation, ask per agent with `isolation: "worktree"` (a
+  throwaway copy of the tree; the agent's changes come back as a diff and the
+  real tree is never modified), or set `workspaceMode: "copy"` in
+  odw.config.json to isolate every agent.
 - **Cost**: concurrency is capped (default `min(16, cpus - 2)`) and total
   dispatches per run have a hard guard; use `odw pause` / `odw stop` when a
   run exceeds expectations.

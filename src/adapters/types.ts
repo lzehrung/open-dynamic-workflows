@@ -43,7 +43,7 @@ export interface Settings {
   concurrency: number | null;
   /** Hard ceiling on total dispatches per run (runaway guard). */
   maxAgents: number;
-  /** `"copy"` (isolated + diff) or `"inplace"` (read-only / fast). */
+  /** `"inplace"` (default — agents work in the source dir) or `"copy"` (throwaway copy + diff). */
   workspaceMode: "copy" | "inplace";
   /** Per-agent CLI timeout in seconds; `null` => no timeout. */
   timeout: number | null;

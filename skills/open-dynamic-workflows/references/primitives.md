@@ -31,8 +31,9 @@ other primitive organizes calls to it.
 - **opts.agentType** — a **persona** injected into the prompt (e.g.
   `"code-reviewer"`), so it works on every CLI. It is **not** an adapter name and
   never affects adapter selection — only `opts.adapter` does.
-- **opts.isolation** — `"worktree"` requests isolation; satisfied by the default
-  copy-isolated workspace.
+- **opts.isolation** — `"worktree"` gives this agent a throwaway copy of the
+  source tree (the default workspace is the source directory itself); its
+  changes come back as a diff.
 
 Returns the reply text, or the validated object when `schema` is set. Throws on
 hard failure (the CLI errored, or the schema never validated). **Inside

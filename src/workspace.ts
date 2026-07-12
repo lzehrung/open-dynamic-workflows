@@ -2,14 +2,18 @@
  * Workspace isolation and diff capture (cross-cutting).
  *
  * Each `agent` call runs against a *workspace*. Two modes:
- *   - `copy` (default): the source tree is copied to a throwaway directory, the
- *     agent runs there, and its changes are returned as a unified diff. The
- *     caller's real working tree is never touched.
- *   - `inplace`: the agent runs directly in the source directory, no diff. The
- *     right choice for read-only / analysis workflows (e.g. deep-research).
+ *   - `inplace` (default): the agent runs directly in the source directory —
+ *     the same semantics as Claude Code's Workflow tool subagents. No copy,
+ *     no diff.
+ *   - `copy`: the source tree is copied to a throwaway directory, the agent
+ *     runs there, and its changes come back as a unified diff — the real tree
+ *     is never touched. On Linux filesystems with reflink support the copy is
+ *     a near-free copy-on-write clone; elsewhere (including macOS — Node has
+ *     no clonefile path) it is a regular copy. Opt in per agent with
+ *     `isolation: "worktree"`, or globally with `workspaceMode: "copy"`.
  */
 
-import { cp, mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
+import { access, constants, cp, lstat, mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, relative, resolve, sep } from "node:path";
 
@@ -73,9 +77,33 @@ export async function withWorkspace<T>(
   try {
     await cp(source, work, {
       recursive: true,
-      // Apply the ignore list only below the root — never to the root itself,
-      // even if the source dir's own name happens to be an ignored name.
-      filter: (src) => src === source || !IGNORED_DIRS.has(basename(src)),
+      // Reflink-clone where the platform supports it. Today that means Linux
+      // (btrfs/XFS): Node's libuv has no macOS clonefile path, so APFS still
+      // performs a regular copy. Free upgrade where it works, no-op elsewhere.
+      mode: constants.COPYFILE_FICLONE,
+      filter: async (src) => {
+        // Apply the ignore list only below the root — never to the root itself,
+        // even if the source dir's own name happens to be an ignored name.
+        if (src === source) return true;
+        if (IGNORED_DIRS.has(basename(src))) return false;
+        try {
+          const st = await lstat(src);
+          if (st.isDirectory()) {
+            // An unreadable directory would sink the whole copy at cp's own
+            // readdir; probe and skip it instead.
+            await access(src, constants.R_OK | constants.X_OK);
+            return true;
+          }
+          // Sockets, FIFOs and devices cannot be copied (fs.cp throws
+          // ERR_FS_CP_SOCKET/EINVAL) and mean nothing to an agent workspace —
+          // take only regular files and symlinks.
+          return st.isFile() || st.isSymbolicLink();
+        } catch {
+          // Vanished mid-walk (busy trees churn: caches, lock files) or
+          // unreadable — skipping one entry beats failing the whole workspace.
+          return false;
+        }
+      },
     });
     const before = await snapshot(work);
     const ws: Workspace = {

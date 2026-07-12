@@ -109,9 +109,10 @@ Codex、Claude Code、Gemini、Qwen、Kimi 开箱即用，无需配置。要换�
 
 - **隔离**：agent 各自独立运行，互相看不见——除非脚本把一个的输出写进另一个的
   prompt。
-- **工作区**：默认每个 agent 在工作树的隔离副本里运行（copy 模式），真实目录不会被
-  改动。`inplace` 模式没有隔离、没有 diff——只在确实想就地修改、且 `--source` 指向
-  改坏也无所谓的目录时使用。
+- **工作区**：agent 直接在本次运行的 source 目录（`--source`，默认当前目录）里
+  工作——与 Claude Code 自带 Workflow 工具同语义。需要隔离时按 agent 传
+  `isolation: "worktree"`（一次性副本，改动以 diff 形式返回，真实目录不被改动），
+  或在 odw.config.json 里设 `workspaceMode: "copy"` 隔离所有 agent。
 - **成本**：并发有上限（默认 `min(16, cpu核数-2)`），单次运行总派发量有硬兜底；超出
   预期时用 `odw pause` / `odw stop`。
 - **结果**：引擎不会替你 commit、push 或应用 diff。先检视 `return` 值，再决定下一步。

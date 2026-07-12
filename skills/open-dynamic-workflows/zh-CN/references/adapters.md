@@ -52,7 +52,7 @@ shell 出去执行一个本地命令，通过 stdin 或一个参数把拼好的 
   "defaultAdapter": "claude",
   "concurrency": 8,
   "maxAgents": 1000,
-  "workspaceMode": "copy",
+  "workspaceMode": "inplace",
   "timeout": 1800,
   "schemaRetries": 2,
   "runsRoot": "~/.odw/runs",
@@ -79,7 +79,7 @@ shell 出去执行一个本地命令，通过 stdin 或一个参数把拼好的 
 | `defaultAdapter` | 一次调用没指名适配器时用的适配器。未设置时：用唯一配置的那个，或——全新安装下——用 PATH 上唯一真实存在的那个 CLI |
 | `concurrency` | 同时运行的 agent CLI 上限；省略则自动（`min(16, cpus-2)`） |
 | `maxAgents` | 单次运行总派发量的硬上限（防失控兜底） |
-| `workspaceMode` | `"copy"`（隔离工作树 + diff；安全的默认值）或 `"inplace"`（agent 直接在真实目录里工作——没有隔离、没有 diff；只在想要就地修改时使用） |
+| `workspaceMode` | `"inplace"`（默认——agent 直接在本次运行的 source 目录工作，与 Claude Code 的 Workflow 工具同语义）或 `"copy"`（每个 agent 一次性副本 + 改动 diff；也可按 agent 用 `isolation: "worktree"` 选入） |
 | `timeout` | 每个 agent CLI 的超时（秒） |
 | `schemaRetries` | schema 校验失败时的额外重试次数 |
 | `runsRoot` | run 的存放位置（默认 `~/.odw/runs`） |

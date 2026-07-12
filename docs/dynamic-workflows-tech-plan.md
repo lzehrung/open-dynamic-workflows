@@ -115,7 +115,7 @@ Python 版只是 `exec` 一个定义了 `workflow` 函数的模块。JS 版必�
 | **loader（核心）** | meta 抽取 + 脚本体包裹 + 原语注入 | [`src/loader.ts`](../src/loader.ts) |
 | **L5 运行时层** | 后台 worker、run 目录、状态/进度/控制 | [`src/runtime/`](../src/runtime/) |
 | **L6 接口层** | `odw` CLI（run/status/logs/result/list/pause/stop + `--wait`）、skill 文档、示例 | [`src/cli.ts`](../src/cli.ts) |
-| **工作区隔离**（横切） | 每次 agent 调用在隔离副本运行、回收 diff，默认不污染主工作区 | [`src/workspace.ts`](../src/workspace.ts) |
+| **工作区**（横切） | agent 默认就地在 source 目录执行；隔离副本+diff 为选入（isolation: "worktree" 或 workspaceMode: "copy"） | [`src/workspace.ts`](../src/workspace.ts) |
 
 调用关系：
 

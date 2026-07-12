@@ -1,8 +1,8 @@
 // Two rival CLIs hand code to each other through a shared on-disk directory.
-// This ONLY works in inplace mode against a throwaway --source dir.
+// This needs inplace mode (the default) against a throwaway --source dir.
 //
 // odw.config.json (keys are FLAT/top-level — nesting under "settings" is
-// silently ignored and you fall back to copy mode, where edits evaporate):
+// silently ignored and you fall back to the built-in defaults):
 //   {
 //     "defaultAdapter": "claude",
 //     "workspaceMode": "inplace",

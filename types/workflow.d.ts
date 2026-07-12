@@ -27,11 +27,11 @@ declare global {
     label?: string;
     /** Override the current phase for this one call (use inside parallel/pipeline). */
     phase?: string;
-    /** Reserved (v1.5): map to an adapter's model flag. */
+    /** Select a model; routed to the adapter's declared model flag. */
     model?: string;
-    /** Reserved (v1.5): map to a named adapter/role. */
+    /** Persona injected into the prompt (works on every CLI); not an adapter name. */
     agentType?: string;
-    /** Reserved (v1.5): `"worktree"` for git-worktree isolation. */
+    /** `"worktree"`: run this agent in a throwaway copy of the source tree (changes return as a diff). */
     isolation?: "worktree";
   }
 
