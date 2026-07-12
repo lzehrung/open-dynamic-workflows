@@ -131,10 +131,10 @@ read [`references/adapters.md`](references/adapters.md) and write an
   the script feeds one's output into another's prompt.
 - **Workspace**: agents run directly in the run's source directory (`--source`,
   default the current directory) — the same semantics as Claude Code's own
-  Workflow tool. For isolation, ask per agent with `isolation: "worktree"` (a
-  throwaway copy of the tree; the agent's changes come back as a diff and the
-  real tree is never modified), or set `workspaceMode: "copy"` in
-  odw.config.json to isolate every agent.
+  Workflow tool. For isolation, ask per agent with `isolation: "worktree"`: the
+  agent gets a throwaway **git worktree** (needs the source to be a git repo
+  with at least one commit; the agent sees HEAD, not uncommitted edits) and its
+  changes come back as a diff — the real tree is never modified.
 - **Cost**: concurrency is capped (default `min(16, cpus - 2)`) and total
   dispatches per run have a hard guard; use `odw pause` / `odw stop` when a
   run exceeds expectations.

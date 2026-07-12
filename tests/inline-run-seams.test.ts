@@ -98,7 +98,6 @@ function writeTwoAdapterConfig(dir: string): string {
     path,
     JSON.stringify({
       defaultAdapter: "alpha",
-      workspaceMode: "inplace",
       adapters: {
         alpha: { command: echo("from-alpha"), stdin: "{prompt}" },
         beta: { command: echo("from-beta"), stdin: "{prompt}" },

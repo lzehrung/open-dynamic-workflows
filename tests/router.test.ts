@@ -54,25 +54,24 @@ test("T5: agentType always produces a note (persona via prompt injection)", () =
   assert.match(p.notes[0]!, /prompt injection/);
 });
 
-test("T4: isolation 'worktree' forces copy mode and notes it, even when default is inplace", () => {
-  const inplace = { ...settings, workspaceMode: "inplace" as const };
-  const p = plan({ prompt: "x", isolation: "worktree" }, claude, inplace);
-  assert.equal(p.workspaceMode, "copy");
-  assert.equal(p.notes.length, 1);
-  assert.match(p.notes[0]!, /worktree/);
-});
-
-test("no options → the plan mirrors the run's default workspace mode, with no notes", () => {
-  const p = plan({ prompt: "x" });
-  assert.equal(p.workspaceMode, settings.workspaceMode);
+test("T4: isolation 'worktree' routes to a real git worktree — honored, so no note", () => {
+  const p = plan({ prompt: "x", isolation: "worktree" }, claude);
+  assert.equal(p.workspaceMode, "worktree");
   assert.equal(p.notes.length, 0);
 });
 
-test("T5: every set-but-unhonored option is covered at once (model, isolation, agentType)", () => {
+test("no options → the plan runs in the source directory, with no notes", () => {
+  const p = plan({ prompt: "x" });
+  assert.equal(p.workspaceMode, "inplace");
+  assert.equal(p.notes.length, 0);
+});
+
+test("T5: every set-but-unhonored option is covered at once (model, agentType)", () => {
   const noFlag: Adapter = { name: "noflag", command: ["foo"] };
   const p = plan({ prompt: "x", model: "m", agentType: "qa", isolation: "worktree" }, noFlag);
-  assert.equal(p.notes.length, 3, JSON.stringify(p.notes));
+  // isolation IS honored (real worktree), so it contributes no note.
+  assert.equal(p.workspaceMode, "worktree");
+  assert.equal(p.notes.length, 2, JSON.stringify(p.notes));
   assert.ok(p.notes.some((n) => /model 'm'/.test(n)));
   assert.ok(p.notes.some((n) => /qa/.test(n)));
-  assert.ok(p.notes.some((n) => /worktree/.test(n)));
 });

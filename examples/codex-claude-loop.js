@@ -5,7 +5,6 @@
 // silently ignored and you fall back to the built-in defaults):
 //   {
 //     "defaultAdapter": "claude",
-//     "workspaceMode": "inplace",
 //     "adapters": {
 //       "claude": {
 //         "command": ["claude", "--print", "--dangerously-skip-permissions", "--no-session-persistence"],

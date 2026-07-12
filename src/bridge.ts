@@ -4,7 +4,7 @@
  * Given an {@link AgentRequest} it: resolves the adapter, composes a
  * self-contained prompt (independence framing + optional schema instructions),
  * runs the adapter in its workspace (the source tree by default, a throwaway
- * copy when isolation is requested), and — when a schema is requested —
+ * git worktree when isolation is requested), and — when a schema is requested —
  * extracts/validates the reply and retries with corrective feedback until it
  * conforms or the retry budget is spent.
  *
@@ -45,7 +45,7 @@ export interface AgentRequest {
   model?: string;
   /** Persona to take on; injected into the prompt (universal, every CLI). */
   agentType?: string;
-  /** `"worktree"` requests isolation; satisfied by a copy-isolated workspace. */
+  /** `"worktree"`: run this agent in a throwaway git worktree (as in Claude Code). */
   isolation?: "worktree";
 }
 

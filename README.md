@@ -426,7 +426,7 @@ runs end-to-end (plan → gather → verify → synthesize → critique).
 
 ### Roadmap (v1.5+)
 
-`model` / `agentType` rich routing · git-worktree `isolation` · adapter-reported
+`model` / `agentType` rich routing · adapter-reported
 token usage (today's budget meters an estimate) · resume / journaling · a
 `Date.now`/`Math.random` sandbox for replay-determinism. Full plan:
 [`docs/dynamic-workflows-tech-plan.md`](docs/dynamic-workflows-tech-plan.md).

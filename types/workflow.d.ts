@@ -31,7 +31,7 @@ declare global {
     model?: string;
     /** Persona injected into the prompt (works on every CLI); not an adapter name. */
     agentType?: string;
-    /** `"worktree"`: run this agent in a throwaway copy of the source tree (changes return as a diff). */
+    /** `"worktree"`: run this agent in a throwaway git worktree (needs a committed repo; changes return as a diff). */
     isolation?: "worktree";
   }
 

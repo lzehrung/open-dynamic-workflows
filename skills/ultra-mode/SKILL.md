@@ -137,8 +137,9 @@ Useful arguments:
 - `finalFormat`: requested shape for the synthesis.
 
 Ultra-mode lanes request isolation explicitly (`isolation: "worktree"`), so
-lane edits land in throwaway copies — keep that unless the user explicitly asks
-for shared in-place execution (ODW's default) and accepts the risk. Stop or pause unexpected runs with
+lane edits land in throwaway git worktrees — keep that unless the user
+explicitly asks for shared in-place execution (ODW's default) and accepts the
+risk. Worktree isolation needs the source to be a committed git repo. Stop or pause unexpected runs with
 `odw stop <run_id>` or `odw pause <run_id>`.
 
 ## Serial Fallback

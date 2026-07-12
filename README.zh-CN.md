@@ -390,7 +390,7 @@ npm run build:binary  # 打包 + Node SEA + postject → 单个自包含的 ./bu
 
 ### 路线图(v1.5+)
 
-`model` / `agentType` 富路由 · git-worktree `isolation` · adapter 上报的真实 token
+`model` / `agentType` 富路由 · adapter 上报的真实 token
 用量(当前预算按估算计量)· resume / journaling · 用于可重放确定性的
 `Date.now`/`Math.random` 沙箱。
 完整方案见 [`docs/dynamic-workflows-tech-plan.md`](docs/dynamic-workflows-tech-plan.md);

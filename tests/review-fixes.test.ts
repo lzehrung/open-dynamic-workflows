@@ -10,13 +10,11 @@ import { defaultConfig } from "../src/adapters/config.js";
 import { runCommand } from "../src/adapters/runner.js";
 import { Bridge } from "../src/bridge.js";
 import { main } from "../src/cli.js";
-import { unifiedDiff } from "../src/diff.js";
 import { WorkflowScriptError } from "../src/errors.js";
 import { loadWorkflowScript } from "../src/loader.js";
 import { extractJson, validate } from "../src/schema.js";
 import { RunStore } from "../src/runtime/run-store.js";
 import { executeRun } from "../src/runtime/worker.js";
-import { withWorkspace } from "../src/workspace.js";
 
 // --- loader (findings 1, 2, 6, 7) -------------------------------------------
 
@@ -69,18 +67,11 @@ test("schema: extractJson skips an inline fence and finds the real JSON block", 
 test("bridge: a parsed JSON null is accepted by a nullable schema (not 'no JSON')", async () => {
   const c = defaultConfig();
   c.settings.defaultAdapter = "claude";
-  c.settings.workspaceMode = "inplace";
   const bridge = new Bridge(c, {
     runner: async () => ({ returncode: 0, stdout: "null", stderr: "", timedOut: false, duration: 0 }),
   });
   const out = await bridge.run({ prompt: "p", schema: { type: "null" } });
   assert.equal(out.value, null);
-});
-
-// --- diff (finding 8) -------------------------------------------------------
-
-test("diff: a brand-new file uses '-0,0' in the hunk header", () => {
-  assert.match(unifiedDiff("", "a\nb\n", "a/f", "b/f"), /@@ -0,0 \+1,2 @@/);
 });
 
 // --- runner (findings 3, 4) -------------------------------------------------
@@ -91,21 +82,6 @@ test("runner: a signal-killed child reports a non-zero returncode (not 0)", asyn
 });
 
 // --- workspace (finding 9) --------------------------------------------------
-
-test("workspace: a source dir named 'dist' is still copied (root not ignored)", async () => {
-  const parent = mkdtempSync(join(tmpdir(), "odw-ws2-"));
-  const src = join(parent, "dist");
-  mkdirSync(src);
-  writeFileSync(join(src, "f.txt"), "hi\n");
-  try {
-    const content = await withWorkspace(src, "copy", async (ws) =>
-      readFileSync(join(ws.path, "f.txt"), "utf8"),
-    );
-    assert.equal(content, "hi\n");
-  } finally {
-    rmSync(parent, { recursive: true, force: true });
-  }
-});
 
 // --- cli (findings 11, 12, 15) ----------------------------------------------
 

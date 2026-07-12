@@ -111,8 +111,9 @@ Codex、Claude Code、Gemini、Qwen、Kimi 开箱即用，无需配置。要换�
   prompt。
 - **工作区**：agent 直接在本次运行的 source 目录（`--source`，默认当前目录）里
   工作——与 Claude Code 自带 Workflow 工具同语义。需要隔离时按 agent 传
-  `isolation: "worktree"`（一次性副本，改动以 diff 形式返回，真实目录不被改动），
-  或在 odw.config.json 里设 `workspaceMode: "copy"` 隔离所有 agent。
+  `isolation: "worktree"`：agent 获得一个一次性 **git worktree**（要求 source
+  是有至少一次提交的 git 仓库；agent 看到的是 HEAD，不含未提交改动），其改动
+  以 diff 形式返回——真实目录不被改动。
 - **成本**：并发有上限（默认 `min(16, cpu核数-2)`），单次运行总派发量有硬兜底；超出
   预期时用 `odw pause` / `odw stop`。
 - **结果**：引擎不会替你 commit、push 或应用 diff。先检视 `return` 值，再决定下一步。

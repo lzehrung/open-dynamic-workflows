@@ -54,7 +54,6 @@ A user file is merged over the built-ins, so you only specify what you change.
   "defaultAdapter": "claude",
   "concurrency": 8,
   "maxAgents": 1000,
-  "workspaceMode": "inplace",
   "timeout": 1800,
   "schemaRetries": 2,
   "runsRoot": "~/.odw/runs",
@@ -82,7 +81,6 @@ did-you-mean hint) instead of silently ignoring them.
 | `defaultAdapter` | adapter used when a call does not name one. Unset: the sole configured adapter, or — on a fresh install — the sole adapter whose CLI is actually on PATH |
 | `concurrency` | max agent CLIs running at once; omit for auto (`min(16, cpus-2)`) |
 | `maxAgents` | hard cap on total dispatches per run (runaway guard) |
-| `workspaceMode` | `"inplace"` (default — agents work directly in the run's source directory, the same semantics as Claude Code's Workflow tool) or `"copy"` (throwaway copy per agent + diff of its changes; also available per agent via `isolation: "worktree"`) |
 | `timeout` | per-agent CLI timeout in seconds |
 | `schemaRetries` | extra attempts when a schema fails to validate |
 | `runsRoot` | where runs are stored (default `~/.odw/runs`) |
