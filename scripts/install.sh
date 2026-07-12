@@ -88,7 +88,10 @@ mv -f "$TMP/open-dynamic-workflows/SKILL.md" "$SKILL_DIR/SKILL.md"
 mv -f "$TMP/open-dynamic-workflows/references/primitives.md" "$SKILL_DIR/references/primitives.md"
 mv -f "$TMP/open-dynamic-workflows/references/adapters.md" "$SKILL_DIR/references/adapters.md"
 
-echo "✓ installed $("$BIN_DIR/odw" --version)"
+# A checked assignment: a binary that cannot run on this machine must abort the
+# install loudly here, not slip past inside an echo's command substitution.
+ODW_VER="$("$BIN_DIR/odw" --version)"
+echo "✓ installed $ODW_VER"
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
   *)
@@ -96,8 +99,37 @@ case ":$PATH:" in
     echo "        echo 'export PATH=\"$BIN_DIR:\$PATH\"' >> ~/.zshrc   # or ~/.bashrc"
     ;;
 esac
+
+# --- pick the default agent ---------------------------------------------------
+# With several agent CLIs installed, odw needs to know which one bare agent()
+# calls drive; `odw init` detects what's on PATH and settles it now instead of
+# at the first failing run. All the logic lives in the binary — the shell only
+# routes a keyboard to it: under curl|sh stdin is the script stream, so the
+# interactive pick reads /dev/tty; with no keyboard (agent-driven installs, CI)
+# init degrades to a report telling the agent to ask its user and run
+# `odw init --adapter <name>`. The --help probe skips all of this when
+# ODW_VERSION pins a release that predates `odw init`.
+if HELP_OUT="$("$BIN_DIR/odw" --help 2>/dev/null)"; then
+  if printf '%s\n' "$HELP_OUT" | grep -q "odw init"; then
+    echo ""
+    # Interactive only as the terminal's FOREGROUND job: a backgrounded install
+    # (`curl … | sh &`) that read /dev/tty would be stopped cold by SIGTTIN.
+    FG_PGID="$(ps -o tpgid= -p $$ 2>/dev/null | tr -d ' ' || true)"
+    MY_PGID="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ' || true)"
+    if [ -z "${CI:-}" ] && [ -z "${ODW_DETACH:-}" ] && [ "$FG_PGID" = "$MY_PGID" ] \
+       && ( : </dev/tty ) 2>/dev/null; then
+      "$BIN_DIR/odw" init </dev/tty || true
+    else
+      "$BIN_DIR/odw" init --check || true
+    fi
+  fi   # release predates `odw init`: nothing to run
+else
+  echo "  warning: $BIN_DIR/odw --help failed — the binary may not run on this machine" >&2
+fi
+
 echo ""
 echo "next steps:"
 echo "  odw --version                       # confirm the binary works"
+echo "  odw init                            # (re)pick the default agent, if you skipped it above"
 echo "  odw run <workflow.js> --wait        # run your first workflow"
 echo "  or just ask your agent: \"use Open Dynamic Workflows to …\" — it picked up the skill"

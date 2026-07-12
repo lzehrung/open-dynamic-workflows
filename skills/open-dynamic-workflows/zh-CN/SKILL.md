@@ -105,6 +105,11 @@ Codex、Claude Code、Gemini、Qwen、Kimi 开箱即用，无需配置。要换�
 接入自定义 CLI 时，读 [`references/adapters.md`](references/adapters.md)，写一个
 `odw.config.json`（放在项目根或 `~/.config/odw/config.json`，或用 `--config` 指定）。
 
+如果运行报 **AdapterNotFound**（装了多个 agent CLI 但没选默认）：先跑
+`odw init --check` 查看装了哪些 CLI——在你的非交互 shell 里它只报告、绝不弹提示。
+然后**问你的用户**想默认用哪个，再用 `odw init --adapter <名字>` 写入他们的选择。
+不要替用户悄悄决定：默认值决定了每个裸 `agent()` 调用花的是哪家 CLI 的额度和权限。
+
 ## 必须知道的行为
 
 - **隔离**：agent 各自独立运行，互相看不见——除非脚本把一个的输出写进另一个的

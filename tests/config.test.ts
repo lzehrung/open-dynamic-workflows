@@ -210,7 +210,11 @@ test("resolveAdapter with no default and several installed CLIs errors with guid
         err instanceof AdapterNotFound &&
         /installed here: claude, codex/.test(err.message) &&
         /defaultAdapter/.test(err.message) &&
-        /agent\(prompt, \{ adapter:/.test(err.message),
+        // every suggested fix names a REAL installed adapter, and the
+        // interactive way out (odw init) is discoverable from the error itself
+        /odw init --adapter claude/.test(err.message) &&
+        /pass --adapter claude to odw run/.test(err.message) &&
+        /agent\(prompt, \{ adapter: "claude"/.test(err.message),
     );
   } finally {
     process.env.PATH = oldPath;

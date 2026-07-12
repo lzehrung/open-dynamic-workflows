@@ -125,6 +125,13 @@ read [`references/adapters.md`](references/adapters.md) and write an
 `odw.config.json` (at the project root or `~/.config/odw/config.json`, or pass
 `--config`).
 
+If a run fails with **AdapterNotFound** (several agent CLIs installed, no
+default picked): run `odw init --check` to see which CLIs are installed — in
+your non-interactive shell it only reports, never prompts. Then **ask your
+user** which CLI to default to and persist their answer with
+`odw init --adapter <name>`. Do not pick for them silently; the default decides
+which vendor's CLI (and whose quota/permissions) every bare `agent()` call uses.
+
 ## Behavior you must know
 
 - **Isolation**: agents run independently and never see each other — unless

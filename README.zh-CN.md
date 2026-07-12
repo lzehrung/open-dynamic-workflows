@@ -139,6 +139,10 @@ cp -r open-dynamic-workflows/skills/open-dynamic-workflows ~/.claude/skills/open
 
 ## 快速开始
 
+只装了一个 CLI(只有 `claude` 或只有 `codex`)?零配置,直接往下看。装了好几个?安装器
+已经让你选过默认了;`odw init` 随时可以重选(agent 则在问过你之后用
+`odw init --adapter <名字>` 写入)。
+
 ODW 主要是**被你的 coding agent 驱动**的,不是手动跑。装好 skill 和二进制后,你只要把一个
 大任务丢给 agent——它会**自己写一个 workflow 并跑起来**,而且是在它自己的上下文之外:
 
@@ -277,7 +281,9 @@ odw logs --workflow adversarial-verify --follow
 
 ## 配置适配器
 
-Codex、Claude Code、Gemini、Qwen、Kimi 开箱即用。要改默认、调参或加自己的 CLI,放一个
+Codex、Claude Code、Gemini、Qwen、Kimi 开箱即用。`odw init` 会列出装了哪些 CLI
+(带各自的权限姿态)并设置默认——在终端里是交互式选择,其他环境退化为纯报告,
+`odw init --adapter <名字>` 则不弹提示直接写入。要调参或加自己的 CLI,放一个
 `odw.config.json`(见 [`odw.config.example.json`](odw.config.example.json))到项目根、
 `~/.config/odw/config.json`,或用 `--config` 指定。ODW 只调用本地命令——绝不直接调
 模型 API。

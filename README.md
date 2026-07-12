@@ -148,6 +148,10 @@ for the skill). For now, use the binary above.
 
 ## Quick start
 
+One CLI installed (just `claude`, or just `codex`)? Zero config — skip ahead.
+Several? The installer already asked you to pick a default; `odw init` re-opens
+that choice anytime (agents use `odw init --adapter <name>` after asking you).
+
 ODW is mostly driven **by your coding agent**, not by hand. With the skill and
 binary installed, just ask your agent for something big — it writes a workflow and
 runs it for you, out of its own context:
@@ -297,8 +301,11 @@ Claude Code's own runs stay strictly read-only.
 
 ## Configure adapters
 
-Codex, Claude Code, Gemini, Qwen, and Kimi work out of the box. To change the
-default, tune flags, or add your own CLI, drop an `odw.config.json` (see
+Codex, Claude Code, Gemini, Qwen, and Kimi work out of the box. `odw init`
+shows what's installed (with each CLI's permission posture) and sets the
+default — interactively at a terminal, as a plain report anywhere else, and
+`odw init --adapter <name>` writes the choice without prompting. To tune flags
+or add your own CLI, drop an `odw.config.json` (see
 [`odw.config.example.json`](odw.config.example.json)) in the project root,
 `~/.config/odw/config.json`, or pass `--config`. ODW only shells out to local
 commands — it never calls model APIs directly.

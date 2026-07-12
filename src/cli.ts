@@ -17,12 +17,14 @@
 
 import { spawn } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
-import { basename } from "node:path";
+import { basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
-import { loadConfig, resolveRunsRoot } from "./adapters/config.js";
+import { loadConfig, resolveAdapter, resolveRunsRoot } from "./adapters/config.js";
+import { AdapterNotFound } from "./errors.js";
 import { VERSION } from "./index.js";
+import { cmdInit } from "./init.js";
 import { startRun, startRunFromSource, waitFor } from "./runtime/launcher.js";
 import { attachRun, formatEvent, resolveRunMode, type RunMode } from "./runtime/live-view.js";
 import { RunStore, TERMINAL_STATES } from "./runtime/run-store.js";
@@ -32,6 +34,7 @@ import { isSeaBinary } from "./sea.js";
 import { listWorkflows, resolveWorkflow } from "./workflows/resolve.js";
 
 export const COMMANDS = [
+  "init",
   "run",
   "attach",
   "rerun",
@@ -60,6 +63,7 @@ export function helpText(): string {
     "Run Claude Code-format dynamic-workflow scripts against any coding-agent CLI.",
     "",
     "Usage:",
+    "  odw init [--adapter <name>] [--check]              pick the default agent CLI (first-time setup)",
     "  odw run <script.js|name> [--args JSON|@file]       start a workflow (see modes below)",
     "  odw attach <run_id>                                attach the live foreground view to a run",
     "  odw rerun <run_id>                                 start a fresh run with the same inputs",
@@ -115,6 +119,8 @@ export async function main(argv: string[]): Promise<number> {
         // Hidden: the worker entrypoint a background run re-execs into. In a SEA
         // binary there is no separate worker.js, so the binary calls itself here.
         return await cmdWorker(rest);
+      case "init":
+        return await cmdInitCli(rest);
       case "run":
         return await cmdRun(rest);
       case "attach":
@@ -160,6 +166,23 @@ async function cmdWorker(rest: string[]): Promise<number> {
   }
   const state = await executeRun(runDir);
   return state === "done" ? 0 : 1;
+}
+
+/** `odw init` — detect agent CLIs and set/inspect the default (see src/init.ts). */
+async function cmdInitCli(rest: string[]): Promise<number> {
+  const { values } = parseArgs({
+    args: rest,
+    options: {
+      adapter: { type: "string" },
+      check: { type: "boolean" },
+      config: { type: "string" },
+    },
+  });
+  return cmdInit({
+    ...(values.adapter !== undefined ? { adapter: values.adapter } : {}),
+    check: values.check === true,
+    config: values.config ?? null,
+  });
 }
 
 async function cmdRun(rest: string[]): Promise<number> {
@@ -220,6 +243,8 @@ async function cmdRun(rest: string[]): Promise<number> {
     return 2;
   }
 
+  warnIfNoDefaultAdapter(values.adapter ?? null, values.config ?? null, values.source ?? null, "run");
+
   const { runId, store } = startRun(ref, {
     args: parseArgsValue(values.args),
     configPath: values.config ?? null,
@@ -230,6 +255,36 @@ async function cmdRun(rest: string[]): Promise<number> {
   });
 
   return afterStart(store, runId, resolved.mode, { timeoutMs, hint: "started run" });
+}
+
+/**
+ * Launch-time preflight: a missing/ambiguous default adapter is knowable NOW,
+ * but a detached start would defer it into the run — the launch prints a run id,
+ * exits 0, and the failure is only visible in `odw status`. Surface it here.
+ * A warning, not an error: workflows that name adapters per call never need a
+ * default, so the launch must not be blocked. Quiet load — the launcher's own
+ * loadConfig lints the same file right after. The worker runs with cwd =
+ * --source, so the project-local config is resolved against source, not the
+ * launcher's cwd — else this would warn about a config the run never reads
+ * (and stay silent about the one it does). Exported for tests.
+ */
+export function warnIfNoDefaultAdapter(
+  adapter: string | undefined | null,
+  configPath: string | null,
+  source: string | null,
+  command: string,
+): void {
+  if (adapter != null) return;
+  try {
+    resolveAdapter(
+      loadConfig(configPath, { quiet: true, ...(source ? { cwd: resolve(source) } : {}) }),
+    );
+  } catch (err) {
+    if (!(err instanceof AdapterNotFound)) return; // a broken config file fails the launch itself
+    process.stderr.write(
+      `odw ${command}: warning: bare agent() calls in this run will fail — ${err.message}\n`,
+    );
+  }
 }
 
 /**
@@ -456,6 +511,7 @@ async function cmdRerun(rest: string[]): Promise<number> {
     adapter: (meta.adapter as string | null) ?? null,
     budgetTotal: (meta.budgetTotal as number | null) ?? null,
   };
+  warnIfNoDefaultAdapter(opts.adapter, opts.configPath, opts.source, "rerun");
   // An inline-launched run's script lives inside the OLD run dir. Re-archive its
   // source into the NEW run (via startRunFromSource) rather than pointing the new
   // run back at the old directory — so it stays self-contained and is correctly
