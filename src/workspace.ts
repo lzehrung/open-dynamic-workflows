@@ -9,20 +9,25 @@
  *     in a throwaway `git worktree` of the source repository — again the same
  *     mechanism Claude Code uses. Worktrees share the repo's object store, so
  *     setup is near-free regardless of tree size. The agent's changes come back
- *     as a unified diff (`git add -N` first, so brand-new files appear too) and
- *     the worktree is removed afterwards; the diff is the artifact.
+ *     as a unified diff against the commit the worktree started from — staging
+ *     or even committing inside the worktree does not hide work — and the
+ *     worktree is removed afterwards; the diff is the artifact.
  *
- * Two consequences of the git mechanism worth knowing:
+ * Known properties of the git mechanism (shared with Claude Code's worktrees):
  *   - the source must be a git repository with at least one commit; asking for
  *     isolation elsewhere fails that agent call with an actionable error
- *   - the worktree is a clean checkout of HEAD — the agent sees the last
- *     commit, not any uncommitted edits in the source tree
+ *   - the worktree is a clean checkout of the base commit — the agent sees the
+ *     last commit, not any uncommitted edits in the source tree
+ *   - submodules are NOT initialised (their directories are empty), and
+ *     absolute symlinks are checked out verbatim — a link that points back
+ *     into the source tree escapes the isolation if the agent writes through it
  */
 
 import { execFile } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { closeSync, openSync, readSync } from "node:fs";
+import { mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
@@ -38,12 +43,44 @@ export interface Workspace {
   diff(): Promise<string>;
 }
 
-/** Diffs can be large; give git plenty of stdout room (32 MiB). */
-const GIT_MAX_BUFFER = 32 * 1024 * 1024;
+/** Everything the runner captures from git directly is small; diffs go to a file. */
+const GIT_MAX_BUFFER = 4 * 1024 * 1024;
+/** Diffs beyond this are truncated with a marker (nothing downstream wants 1 GiB). */
+const DIFF_CAP_BYTES = 32 * 1024 * 1024;
 
 async function git(dir: string, args: string[]): Promise<string> {
   const { stdout } = await run("git", ["-C", dir, ...args], { maxBuffer: GIT_MAX_BUFFER });
   return stdout;
+}
+
+function gitDetail(err: unknown): string {
+  return (err as { stderr?: string }).stderr?.trim() || (err as Error).message;
+}
+
+/** Read at most `cap` bytes of `path`, appending a truncation marker if cut. */
+async function readCapped(path: string, cap: number): Promise<string> {
+  const info = await stat(path);
+  if (info.size <= cap) {
+    const fd = openSync(path, "r");
+    try {
+      const buf = Buffer.alloc(info.size);
+      const n = readSync(fd, buf, 0, buf.length, 0);
+      return buf.subarray(0, n).toString("utf8");
+    } finally {
+      closeSync(fd);
+    }
+  }
+  const fd = openSync(path, "r");
+  try {
+    const buf = Buffer.alloc(cap);
+    const n = readSync(fd, buf, 0, cap, 0);
+    return (
+      buf.subarray(0, n).toString("utf8") +
+      `\n... [diff truncated: ${info.size} bytes total, first ${cap} shown]\n`
+    );
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** Open a workspace, run `fn` inside it, then clean up (worktree mode only). */
@@ -59,41 +96,67 @@ export async function withWorkspace<T>(
     throw new Error(`unknown workspace mode '${mode}'; use 'inplace' or 'worktree'`);
   }
 
-  const tmp = await mkdtemp(join(tmpdir(), "odw-wt-"));
-  const work = join(tmp, basename(source));
+  // Resolve the repo first so "not a repo / no commits" gets its own targeted
+  // message, and a later `worktree add` failure (LFS, filters, permissions)
+  // reports git's actual complaint instead of misleading init advice.
+  let top: string;
+  let base: string;
   try {
-    await git(source, ["worktree", "add", "--detach", work]);
+    top = (await git(source, ["rev-parse", "--show-toplevel"])).trim();
+    base = (await git(source, ["rev-parse", "--verify", "HEAD"])).trim();
   } catch (err) {
-    await rm(tmp, { recursive: true, force: true });
-    const detail = (err as { stderr?: string }).stderr?.trim() || (err as Error).message;
     throw new Error(
       `isolation "worktree" needs a git repository with at least one commit at '${source}' ` +
         `(agents are isolated via git worktrees, as in Claude Code). ` +
-        `Run without isolation, or initialise the repo first. git said: ${detail}`,
+        `Run without isolation, or initialise the repo first. git said: ${gitDetail(err)}`,
     );
   }
 
+  const tmp = await mkdtemp(join(tmpdir(), "odw-wt-"));
+  const work = join(tmp, basename(top));
+  try {
+    // Pin the worktree to the resolved base commit: immune to concurrent HEAD
+    // movement, and the later diff is taken against this exact baseline.
+    await git(top, ["worktree", "add", "--detach", work, base]);
+  } catch (err) {
+    await rm(tmp, { recursive: true, force: true });
+    throw new Error(`could not create an isolated git worktree from '${top}': ${gitDetail(err)}`);
+  }
+
+  // The worktree mirrors the REPO root; the agent's workspace is the source's
+  // corresponding subdirectory inside it (`--source repo/packages/foo` must not
+  // silently promote the agent to the repo root). realpath BOTH sides: git
+  // reports the resolved toplevel while `source` may arrive through a symlink
+  // (macOS /tmp, /var), and a mismatched `relative()` would escape the worktree.
+  const rel = relative(await realpath(top), await realpath(resolve(source)));
+  const wsPath = rel === "" || rel.startsWith("..") ? work : join(work, rel);
+
   const ws: Workspace = {
-    path: work,
+    path: wsPath,
     source,
     diff: async () => {
       // Intent-to-add stages the *paths* of brand-new files (respecting
-      // .gitignore) so `git diff` shows their content alongside edits.
+      // .gitignore) so they appear in the diff; diffing against the pinned
+      // base commit keeps staged and even committed work visible.
       await git(work, ["add", "--all", "--intent-to-add", "."]);
-      return git(work, ["diff"]);
+      const out = join(tmp, "odw-diff.patch");
+      // --output writes to a file: no stdout buffer to overflow, any size.
+      await git(work, ["diff", base, `--output=${out}`]);
+      return readCapped(out, DIFF_CAP_BYTES);
     },
   };
   try {
     return await fn(ws);
   } finally {
-    // `remove --force` handles a dirty worktree; if git still refuses (or the
-    // directory is already gone), fall back to deleting the tree and letting
-    // `worktree prune` drop the stale registration.
+    // An agent may have locked its worktree; unlock (best-effort), then
+    // remove with double --force (dirty AND locked); if git still refuses,
+    // delete the tree and prune the stale registration.
+    await git(top, ["worktree", "unlock", work]).catch(() => {});
     try {
-      await git(source, ["worktree", "remove", "--force", work]);
+      await git(top, ["worktree", "remove", "--force", "--force", work]);
     } catch {
       await rm(tmp, { recursive: true, force: true }).catch(() => {});
-      await git(source, ["worktree", "prune"]).catch(() => {});
+      await git(top, ["worktree", "prune"]).catch(() => {});
     }
     await rm(tmp, { recursive: true, force: true }).catch(() => {});
   }

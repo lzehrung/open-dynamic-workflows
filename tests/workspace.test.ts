@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,6 +30,10 @@ test("worktree mode isolates via a real git worktree and diffs edits AND new fil
       assert.ok(existsSync(join(ws.path, "a.txt")), "worktree has the committed tree");
       await writeFile(join(ws.path, "a.txt"), "line1\nCHANGED\n");
       await writeFile(join(ws.path, "brand-new.txt"), "hello\n");
+      // Agents habitually stage and even commit — that must not hide work,
+      // because the diff is taken against the pinned base commit.
+      git(ws.path, "add", "a.txt");
+      git(ws.path, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--no-gpg-sign", "-m", "agent commit");
       return ws.diff();
     });
     assert.match(diff, /a\/a\.txt/);
@@ -41,6 +45,41 @@ test("worktree mode isolates via a real git worktree and diffs edits AND new fil
     assert.equal(await readFile(join(src, "a.txt"), "utf8"), "line1\nline2\n");
     const worktrees = git(src, "worktree", "list", "--porcelain");
     assert.equal(worktrees.trim().split("\n\n").length, 1, "only the main worktree remains");
+  } finally {
+    rmSync(src, { recursive: true, force: true });
+  }
+});
+
+test("worktree mode maps a repo SUBDIRECTORY source to the matching subdir", async () => {
+  const src = makeRepo();
+  const sub = join(src, "packages", "foo");
+  try {
+    mkdirSync(sub, { recursive: true });
+    writeFileSync(join(sub, "f.txt"), "sub\n");
+    git(src, "add", "-A");
+    git(src, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--no-gpg-sign", "-m", "sub");
+    const diff = await withWorkspace(sub, "worktree", async (ws) => {
+      assert.ok(ws.path.endsWith(join("packages", "foo")), `agent lands in the subdir, got ${ws.path}`);
+      assert.ok(existsSync(join(ws.path, "f.txt")));
+      await writeFile(join(ws.path, "f.txt"), "edited\n");
+      return ws.diff();
+    });
+    assert.match(diff, /packages\/foo\/f\.txt/);
+    assert.equal(await readFile(join(sub, "f.txt"), "utf8"), "sub\n");
+  } finally {
+    rmSync(src, { recursive: true, force: true });
+  }
+});
+
+test("a worktree the agent LOCKED is still cleaned up completely", async () => {
+  const src = makeRepo();
+  try {
+    await withWorkspace(src, "worktree", async (ws) => {
+      git(src, "worktree", "lock", ws.path);
+      return null;
+    });
+    const worktrees = git(src, "worktree", "list", "--porcelain");
+    assert.equal(worktrees.trim().split("\n\n").length, 1, "no stale locked registration");
   } finally {
     rmSync(src, { recursive: true, force: true });
   }

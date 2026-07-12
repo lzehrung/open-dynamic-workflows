@@ -28,7 +28,7 @@ export const meta = {
   description:
     'Two rival CLIs in a turn-based loop: Claude Code implements, Codex reviews, repeat until Codex signs off.',
   whenToUse:
-    'A coding task you want built by one agent and adversarially checked by another. REQUIRES workspaceMode "inplace" and a throwaway --source dir: the two agents hand code to each other through that shared directory on disk (Claude writes the file, Codex reads/runs the same file). Pass a bare task string, or {task, file?, maxRounds?}.',
+    'A coding task you want built by one agent and adversarially checked by another. Run it with a throwaway --source dir: the two agents hand code to each other through that shared directory on disk (Claude writes the file, Codex reads/runs the same file — the default in-place workspace is exactly what makes this work). Pass a bare task string, or {task, file?, maxRounds?}.',
   phases: [{ title: 'Implement' }, { title: 'Review' }],
 }
 

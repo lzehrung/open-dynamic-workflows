@@ -85,8 +85,8 @@ Python 版只是 `exec` 一个定义了 `workflow` 函数的模块。JS 版必�
 | `schema`（JSON Schema） | 给 agent 输出定类型：注入→提取→校验→重试 | ✅（M3） |
 | 并发上限 `min(16, CPU-2)` + agent 总量兜底 1000 | 规模约束，运行时强制 | ✅ |
 | `budget`（`total/spent()/remaining()`） | token 预算 | 🟡 **桩**：`total` 经 `--budget`/args 注入（默认 null），`spent()` best-effort；真实计量延后 |
-| `agent` 的 `model` / `agentType` | 路由到适配器模型参数 / 命名适配器 | 🟡 v1.5 |
-| `isolation:'worktree'` | git worktree 隔离 | 🟡 v1 先用 workspace `copy` 兜底 |
+| `agent` 的 `model` / `agentType` | 路由到适配器模型参数 / prompt 人设 | ✅ 已实现（model 走适配器旗标，agentType 注入 prompt） |
+| `isolation:'worktree'` | git worktree 隔离 | ✅ 真 git worktree（钉在基线提交上，diff 对基线计算） |
 | `workflow()`（嵌套） | 内联调用另一个 workflow（一层） | 🟡 v2，先留清晰报错桩 |
 | `Date.now/Math.random` 沙箱、resume/journaling | 可重放 | ⬜ v2 |
 
