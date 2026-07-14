@@ -22,7 +22,6 @@ test("deep-research.js runs end-to-end (plan -> search -> extract -> vote -> rep
       config,
       JSON.stringify({
         defaultAdapter: "mock",
-        workspaceMode: "inplace",
         schemaRetries: 1,
         concurrency: 8,
         adapters: { mock: { command: [execPath, mockAgent], stdin: "{prompt}" } },

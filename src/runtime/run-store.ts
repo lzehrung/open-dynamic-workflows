@@ -27,10 +27,14 @@
 
 import {
   appendFileSync,
+  closeSync,
   existsSync,
+  fstatSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
+  readSync,
   renameSync,
   writeFileSync,
 } from "node:fs";
@@ -66,7 +70,7 @@ export interface CreateRunInput {
   inlineSource?: string | null;
   /** Run-level adapter override: the default `agent()` adapter for this run. */
   adapter?: string | null;
-  /** Where the run was initiated from (e.g. "launch" for the GUI flow). */
+  /** Where the run was initiated from (e.g. "chat" for Chat Host runs). */
   origin?: string | null;
 }
 
@@ -186,6 +190,54 @@ export class RunStore {
       }
     }
     return out;
+  }
+
+  /**
+   * Incremental read for live observers: return the events appended since
+   * `cursor` and the cursor to pass next time. The cursor only ever advances to
+   * a byte offset just past a complete `\n`-terminated line, so a torn tail
+   * (mid-append) is simply left for the next poll and a multi-byte character
+   * can never be split. Two replacement guards reset the cursor to 0 instead of
+   * misreading: a file smaller than the cursor (truncated in place), and a
+   * changed inode (replaced wholesale — even one that already grew past the old
+   * offset, which a size check alone would silently read from the middle of).
+   */
+  readEventsSince(
+    runId: string,
+    cursor: { offset: number; ino?: number },
+  ): { events: WorkflowEvent[]; cursor: { offset: number; ino?: number } } {
+    const path = this.eventsPath(runId);
+    let fd: number;
+    try {
+      fd = openSync(path, "r");
+    } catch {
+      return { events: [], cursor }; // not written yet (or transiently unreadable)
+    }
+    try {
+      const stat = fstatSync(fd);
+      const size = stat.size;
+      const sameFile = cursor.ino === undefined || cursor.ino === stat.ino;
+      const offset = !sameFile || size < cursor.offset ? 0 : cursor.offset;
+      if (size === offset) return { events: [], cursor: { offset, ino: stat.ino } };
+      const buf = Buffer.alloc(size - offset);
+      const read = readSync(fd, buf, 0, buf.length, offset);
+      const chunk = buf.subarray(0, read);
+      const lastNl = chunk.lastIndexOf(0x0a);
+      if (lastNl === -1) return { events: [], cursor: { offset, ino: stat.ino } }; // torn tail only
+      const events: WorkflowEvent[] = [];
+      for (const line of chunk.subarray(0, lastNl + 1).toString("utf8").split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          events.push(JSON.parse(trimmed) as WorkflowEvent);
+        } catch {
+          // Complete but unparsable line — skip it, same tolerance as readEvents.
+        }
+      }
+      return { events, cursor: { offset: offset + lastNl + 1, ino: stat.ino } };
+    } finally {
+      closeSync(fd);
+    }
   }
 
   // --- result & error --------------------------------------------------------

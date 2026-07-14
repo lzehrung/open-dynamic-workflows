@@ -118,18 +118,18 @@ import { chmodSync, mkdirSync } from "node:fs";
 
 test("collectConfigWarnings flags a nested 'settings' wrapper as ignored", () => {
   const warnings = collectConfigWarnings({
-    settings: { defaultAdapter: "claude", workspaceMode: "inplace" },
+    settings: { defaultAdapter: "claude", runsRoot: "/tmp/x" },
   });
   assert.equal(warnings.length, 1);
   assert.match(warnings[0]!, /IGNORED/);
-  assert.match(warnings[0]!, /"defaultAdapter", "workspaceMode"/);
+  assert.match(warnings[0]!, /"defaultAdapter", "runsRoot"/);
   assert.match(warnings[0]!, /top level/);
 });
 
 test("collectConfigWarnings suggests the nearest key for typos", () => {
-  const warnings = collectConfigWarnings({ workspacemode: "inplace", defaultAdaptor: "codex" });
+  const warnings = collectConfigWarnings({ runsroot: "/tmp/x", defaultAdaptor: "codex" });
   assert.equal(warnings.length, 2);
-  assert.match(warnings[0]!, /did you mean "workspaceMode"/);
+  assert.match(warnings[0]!, /did you mean "runsRoot"/);
   assert.match(warnings[1]!, /did you mean "defaultAdapter"/);
 });
 
@@ -165,7 +165,7 @@ test("loadConfig prints config warnings to stderr", () => {
   }) as typeof process.stderr.write;
   try {
     const p = join(dir, "odw.config.json");
-    writeFileSync(p, JSON.stringify({ settings: { workspaceMode: "inplace" } }));
+    writeFileSync(p, JSON.stringify({ settings: { runsRoot: "/tmp/x" } }));
     loadConfig(p);
     assert.match(captured, /odw: config warning:/);
     assert.match(captured, /IGNORED/);
@@ -210,7 +210,11 @@ test("resolveAdapter with no default and several installed CLIs errors with guid
         err instanceof AdapterNotFound &&
         /installed here: claude, codex/.test(err.message) &&
         /defaultAdapter/.test(err.message) &&
-        /agent\(prompt, \{ adapter:/.test(err.message),
+        // every suggested fix names a REAL installed adapter, and the
+        // interactive way out (odw init) is discoverable from the error itself
+        /odw init --adapter claude/.test(err.message) &&
+        /pass --adapter claude to odw run/.test(err.message) &&
+        /agent\(prompt, \{ adapter: "claude"/.test(err.message),
     );
   } finally {
     process.env.PATH = oldPath;

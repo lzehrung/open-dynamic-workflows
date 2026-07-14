@@ -4,13 +4,12 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { execPath } from "node:process";
 
 import { defaultConfig, listAdapters, loadConfig } from "../src/adapters/config.js";
 import { buildContext } from "../src/context.js";
 import { loadWorkflowScript, scanDualCompat } from "../src/loader.js";
 import { createPrimitives } from "../src/primitives.js";
-import { RunStore, TERMINAL_STATES } from "../src/runtime/run-store.js";
+import { RunStore } from "../src/runtime/run-store.js";
 import { startServer, type ServeHandle } from "../src/runtime/server.js";
 import { executeRun } from "../src/runtime/worker.js";
 
@@ -77,18 +76,10 @@ test("an inline run records meta.inline and suppresses the run-by-name divergenc
 
 function mockServerConfig(dir: string): string {
   const path = join(dir, "odw.config.json");
-  const js = "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>process.stdout.write('ok'))";
   writeFileSync(
     path,
     JSON.stringify({
-      defaultAdapter: "mock",
-      workspaceMode: "inplace",
       workflowsRoot: join(dir, "gwf"),
-      adapters: {
-        mock: { command: [execPath, "-e", js], stdin: "{prompt}" },
-        // configured but its CLI is a path that does not exist → not installed
-        ghost: { command: [join(dir, "no-such-cli")], stdin: "{prompt}" },
-      },
     }),
   );
   return path;
@@ -109,7 +100,6 @@ async function boot(root: string): Promise<{ handle: ServeHandle; store: RunStor
   return { handle, store };
 }
 
-const NOOP = "export const meta = { name: 'noop', description: 'd' }\nreturn 1\n";
 const post = (url: string, body: unknown, headers: Record<string, string> = {}) =>
   fetch(url, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
 
@@ -118,44 +108,15 @@ test("writeGuard accepts application/json;charset and rejects text/plain;x=appli
   const root = mkdtempSync(join(tmpdir(), "odw-rf-"));
   const { handle } = await boot(root);
   try {
-    const good = await post(`${handle.url}/api/runs`, { script: NOOP }, { "content-type": "application/json; charset=utf-8" });
+    const good = await post(`${handle.url}/api/chat/sessions`, {}, { "content-type": "application/json; charset=utf-8" });
     assert.equal(good.status, 200);
     // A CORS "simple request" disguising JSON in a parameter must NOT pass.
-    const bad = await fetch(`${handle.url}/api/runs`, {
+    const bad = await fetch(`${handle.url}/api/chat/sessions`, {
       method: "POST",
       headers: { "content-type": "text/plain; x=application/json" },
-      body: JSON.stringify({ script: NOOP }),
+      body: "{}",
     });
     assert.equal(bad.status, 415);
-  } finally {
-    await handle.close();
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-// #26 — a configured-but-not-installed adapter is rejected server-side.
-test("POST /api/runs rejects an uninstalled adapter with 400", async () => {
-  const root = mkdtempSync(join(tmpdir(), "odw-rf-"));
-  const { handle } = await boot(root);
-  try {
-    const res = await post(`${handle.url}/api/runs`, { script: NOOP, adapter: "ghost" });
-    assert.equal(res.status, 400);
-    assert.match(((await res.json()) as { error: string }).error, /not found on PATH/);
-  } finally {
-    await handle.close();
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-// #15 — a name typed with a .js extension is saved as the stem.
-test("POST /api/workflows strips a trailing .js so `odw run <name>` resolves", async () => {
-  const root = mkdtempSync(join(tmpdir(), "odw-rf-"));
-  const { handle } = await boot(root);
-  try {
-    const res = await post(`${handle.url}/api/workflows`, { name: "review.js", source: NOOP, scope: "global" });
-    assert.equal(res.status, 200);
-    const { path } = (await res.json()) as { path: string };
-    assert.equal(path, join(root, "gwf", "review.js"), "saved as review.js, not review.js.js");
   } finally {
     await handle.close();
     rmSync(root, { recursive: true, force: true });
@@ -197,7 +158,7 @@ test("an over-cap request body is rejected, not left hanging", async () => {
     const huge = "x".repeat(600 * 1024); // > MAX_BODY_BYTES (512KB)
     const status = await new Promise<number>((resolvePromise, reject) => {
       const req = request(
-        { host: "127.0.0.1", port: handle.port, path: "/api/runs", method: "POST", headers: { "content-type": "application/json" } },
+        { host: "127.0.0.1", port: handle.port, path: "/api/chat/sessions", method: "POST", headers: { "content-type": "application/json" } },
         (res) => {
           res.resume();
           res.on("end", () => resolvePromise(res.statusCode ?? 0));

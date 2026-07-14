@@ -54,12 +54,17 @@ export class WorkflowScriptError extends DynamicWorkflowError {}
 /**
  * Errors that must propagate through `parallel`/`pipeline` rather than becoming
  * a `null` result slot. Everything else is a recoverable per-item failure.
+ *
+ * Configuration errors (including a missing/ambiguous adapter) are fatal: they
+ * fail every agent identically, so swallowing them would turn a fixable setup
+ * problem into an exit-0 run full of silent null slots.
  */
 export function isFatalError(error: unknown): boolean {
   return (
     error instanceof AgentLimitExceeded ||
     error instanceof RunStopped ||
-    error instanceof BudgetExhausted
+    error instanceof BudgetExhausted ||
+    error instanceof ConfigError
   );
 }
 

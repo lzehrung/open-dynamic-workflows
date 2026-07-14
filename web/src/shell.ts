@@ -5,7 +5,7 @@ import { store } from "./store";
 import { ACTIVE, clsx, esc } from "./util";
 
 export interface Route {
-  view: "activity" | "workspace" | "jobs" | "job" | "settings" | "launch";
+  view: "chat" | "activity" | "workspace" | "jobs" | "job" | "settings";
   param: string | null;
 }
 
@@ -26,13 +26,8 @@ function crumb(_route: Route): string {
 }
 
 export function toolbar(route: Route): string {
-  // `data-tauri-drag-region="deep"` makes the whole top bar a window-drag handle in
-  // the native (Tauri) shell: it calls the real `start_dragging`, which WKWebView
-  // honors, and the "deep" mode drags on a click anywhere in the subtree while
-  // Tauri's runtime still auto-excludes real controls (<a>/<button>/<input>…). In a
-  // plain browser (`odw serve`) it's just an inert data-attribute — no behavior change.
   return (
-    `<div class="toolbar" data-tauri-drag-region="deep">` +
+    `<div class="toolbar">` +
     `<div style="display:flex;align-items:center;"><div class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></div>${crumb(route)}</div>` +
     `<div class="tr"><span class="kbd">⌘K</span>${connChip()}</div>` +
     `</div>`
@@ -67,7 +62,7 @@ export function rail(route: Route): string {
     `<div class="rail">` +
     `<div class="brand">${logoSvg}<span class="wm">odw</span></div>` +
     `<div class="tagline">${t("fan out coding agents")}</div>` +
-    navItem("launch", route, icons.launch, t("Launch")) +
+    navItem("chat", route, icons.chat, t("Chat")) +
     navItem("activity", route, icons.activity, t("Activity")) +
     navItem("workspace", route, icons.workspace, t("Workspace")) +
     navItem("jobs", route, icons.jobs, t("Jobs"), active.length) +

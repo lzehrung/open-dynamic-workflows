@@ -4,8 +4,10 @@ import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execPath } from "node:process";
 
 import { defaultConfig } from "../src/adapters/config.js";
+import { waitFor } from "../src/runtime/launcher.js";
 import { RunStore } from "../src/runtime/run-store.js";
 import {
   foldAgents,
@@ -15,9 +17,29 @@ import {
   detail,
   listSummaries,
 } from "../src/runtime/runs-view.js";
-import { startServer } from "../src/runtime/server.js";
+import { startServer, type ChatTurnRunner } from "../src/runtime/server.js";
 
 const tempRoot = () => mkdtempSync(join(tmpdir(), "odw-serve-"));
+
+const mockChatRunner = (prompts: string[] = []): ChatTurnRunner => async ({ prompt }, onChunk) => {
+  prompts.push(prompt);
+  onChunk(prompt.includes("finished with state") ? "mock codex follow-up" : "mock codex reply");
+};
+
+async function waitForChat(
+  url: string,
+  predicate: (session: Record<string, any>) => boolean,
+  timeoutMs = 2500,
+): Promise<Record<string, any>> {
+  const started = Date.now();
+  let last: Record<string, any> | null = null;
+  while (Date.now() - started < timeoutMs) {
+    last = await fetch(url).then((r) => r.json());
+    if (predicate(last)) return last;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`chat did not reach expected state: ${JSON.stringify(last)}`);
+}
 
 /** Write a run directory: meta + status + a JSONL event stream. */
 function seedRun(
@@ -372,5 +394,227 @@ test("HTTP: /api/workflows lists managed-dir workflows + detail with source", as
     rmSync(proj, { recursive: true, force: true });
     rmSync(globalWf, { recursive: true, force: true });
     rmSync(globalClaudeWf, { recursive: true, force: true });
+  }
+});
+
+test("HTTP: /api/settings exposes the live runtime config summary", async () => {
+  const root = tempRoot();
+  const proj = tempRoot();
+  const globalWf = tempRoot();
+  const globalClaudeWf = tempRoot();
+  const store = new RunStore(root);
+  const config = defaultConfig();
+  config.settings.workflowsRoot = globalWf;
+  config.settings.claudeWorkflowsRoot = globalClaudeWf;
+  config.settings.defaultAdapter = "codex";
+  const handle = await startServer({
+    store,
+    port: 0,
+    host: "127.0.0.1",
+    cwd: proj,
+    config,
+    configPath: "/tmp/odw.config.json",
+    claudeProjectsRoot: join(root, "no-claude"),
+  });
+  try {
+    const settings = await fetch(`${handle.url}/api/settings`).then((r) => r.json());
+    assert.equal(settings.cwd, proj);
+    assert.equal(settings.runsRoot, root);
+    assert.equal(settings.configPath, "/tmp/odw.config.json");
+    assert.equal(settings.writable, true);
+    assert.ok(settings.adapters.some((a: { name: string; command: string }) => a.name === "codex" && a.command));
+    assert.ok(settings.workflowRoots.some((r: { path: string }) => r.path === globalWf));
+    assert.ok(settings.workflowRoots.some((r: { path: string }) => r.path === globalClaudeWf));
+  } finally {
+    await handle.close();
+    rmSync(root, { recursive: true, force: true });
+    rmSync(proj, { recursive: true, force: true });
+    rmSync(globalWf, { recursive: true, force: true });
+    rmSync(globalClaudeWf, { recursive: true, force: true });
+  }
+});
+
+test("HTTP: Chat Host sessions persist messages and link a real ODW run", async () => {
+  const root = tempRoot();
+  const proj = tempRoot();
+  const store = new RunStore(root);
+  const prompts: string[] = [];
+  const mockAgent =
+    "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{" +
+    "process.stdout.write('mock ODW task result for: '+d.match(/User request:\\n([\\s\\S]*)/)?.[1].trim())})";
+  const configPath = join(proj, "odw.config.json");
+  writeFileSync(
+    configPath,
+    JSON.stringify({
+      defaultAdapter: "mock",
+      workspaceMode: "inplace",
+      adapters: { mock: { command: [execPath, "-e", mockAgent], stdin: "{prompt}" } },
+    }),
+  );
+  const config = defaultConfig();
+  config.settings.defaultAdapter = "mock";
+  config.settings.workspaceMode = "inplace";
+  config.adapters.mock = { name: "mock", command: [execPath, "-e", mockAgent], stdin: "{prompt}" };
+  const handle = await startServer({
+    store,
+    port: 0,
+    host: "127.0.0.1",
+    cwd: proj,
+    config,
+    configPath,
+    claudeProjectsRoot: join(root, "no-claude"),
+    chatRunner: mockChatRunner(prompts),
+  });
+  try {
+    const created = await fetch(`${handle.url}/api/chat/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ source: proj }),
+    }).then((r) => r.json());
+    assert.match(created.id, /^chat_/);
+    assert.equal(created.messages.length, 1);
+
+    const updated = await fetch(`${handle.url}/api/chat/sessions/${created.id}/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "Use ODW workflow routing for this local turn." }),
+    }).then((r) => r.json());
+    assert.equal(updated.linkedRuns.length, 1);
+    const runId = updated.linkedRuns[0].runId;
+    assert.equal(store.exists(runId), true);
+    assert.equal(store.readMeta(runId).origin, "chat");
+    assert.equal(store.readMeta(runId).workflowName, "chat-host-bridge");
+
+    await waitFor(store, runId, { timeoutMs: 5000 });
+
+    const hydrated = await waitForChat(
+      `${handle.url}/api/chat/sessions/${created.id}`,
+      (session) =>
+        session.messages.some((m: { kind?: string }) => m.kind === "chat.odw_result") &&
+        session.messages.some((m: { role: string; text: string; status?: string }) =>
+          m.role === "assistant" && m.text.includes("mock codex follow-up") && m.status === "done",
+        ),
+    );
+    assert.equal(hydrated.state, "done");
+    assert.equal(hydrated.linkedRuns[0].state, "done");
+    assert.equal(hydrated.linkedRuns[0].progress, 1);
+    const tool = hydrated.messages.find((m: { role: string }) => m.role === "tool");
+    assert.equal(tool.tool.status, "done");
+    assert.equal(tool.tool.progress, 1);
+    assert.match(tool.tool.result, /mock ODW task result/);
+    assert.match(tool.tool.result, /Use ODW workflow routing/);
+    assert.equal(prompts.length, 1);
+    assert.match(prompts[0]!, /ODW run /);
+    assert.match(prompts[0]!, /mock ODW task result/);
+
+    const list = await fetch(`${handle.url}/api/chat/sessions`).then((r) => r.json());
+    assert.equal(list.length, 1);
+    assert.equal(list[0].linkedRuns, 1);
+  } finally {
+    await handle.close();
+    rmSync(root, { recursive: true, force: true });
+    rmSync(proj, { recursive: true, force: true });
+  }
+});
+
+test("HTTP: Chat Host ignores negated workflow mentions and deletes sessions", async () => {
+  const root = tempRoot();
+  const proj = tempRoot();
+  const store = new RunStore(root);
+  const prompts: string[] = [];
+  const handle = await startServer({
+    store,
+    port: 0,
+    host: "127.0.0.1",
+    cwd: proj,
+    claudeProjectsRoot: join(root, "no-claude"),
+    chatRunner: mockChatRunner(prompts),
+  });
+  try {
+    const created = await fetch(`${handle.url}/api/chat/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    }).then((r) => r.json());
+
+    const updated = await fetch(`${handle.url}/api/chat/sessions/${created.id}/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "普通消息：hello chat host，不触发 workflow" }),
+    }).then((r) => r.json());
+    assert.equal(updated.linkedRuns.length, 0);
+    assert.equal(updated.messages.some((m: { role: string }) => m.role === "tool"), false);
+    assert.equal(store.listRuns().length, 0);
+    const answered = await waitForChat(
+      `${handle.url}/api/chat/sessions/${created.id}`,
+      (session) =>
+        session.messages.some((m: { role: string; text: string; status?: string }) =>
+          m.role === "assistant" && m.text.includes("mock codex reply") && m.status === "done",
+        ),
+    );
+    assert.equal(answered.linkedRuns.length, 0);
+    assert.equal(prompts.length, 1);
+    assert.match(prompts[0]!, /普通消息/);
+
+    const deleted = await fetch(`${handle.url}/api/chat/sessions/${created.id}`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    assert.equal(deleted.status, 200);
+
+    const missing = await fetch(`${handle.url}/api/chat/sessions/${created.id}`);
+    assert.equal(missing.status, 404);
+    const list = await fetch(`${handle.url}/api/chat/sessions`).then((r) => r.json());
+    assert.equal(list.length, 0);
+  } finally {
+    await handle.close();
+    rmSync(root, { recursive: true, force: true });
+    rmSync(proj, { recursive: true, force: true });
+  }
+});
+
+test("HTTP: Chat Host sidebar summary ignores empty streaming placeholders", async () => {
+  const root = tempRoot();
+  const proj = tempRoot();
+  const store = new RunStore(root);
+  let release!: () => void;
+  const handle = await startServer({
+    store,
+    port: 0,
+    host: "127.0.0.1",
+    cwd: proj,
+    claudeProjectsRoot: join(root, "no-claude"),
+    chatRunner: () => new Promise<void>((resolve) => {
+      release = resolve;
+    }),
+  });
+  try {
+    const created = await fetch(`${handle.url}/api/chat/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    }).then((r) => r.json());
+    const text = "调研下证券ETF看看";
+    await fetch(`${handle.url}/api/chat/sessions/${created.id}/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+
+    const list = await fetch(`${handle.url}/api/chat/sessions`).then((r) => r.json());
+    assert.equal(list[0].state, "running");
+    assert.equal(list[0].lastMessage, text);
+
+    release();
+    await waitForChat(
+      `${handle.url}/api/chat/sessions/${created.id}`,
+      (session) =>
+        session.messages.some((m: { role: string; status?: string }) => m.role === "assistant" && m.status === "done"),
+    );
+  } finally {
+    await handle.close();
+    rmSync(root, { recursive: true, force: true });
+    rmSync(proj, { recursive: true, force: true });
   }
 });

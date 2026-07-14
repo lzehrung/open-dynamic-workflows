@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Seed a throwaway runs root + managed workflow dir with realistic fixtures so
- * the read-only client can be exercised without launching real agents.
+ * the client can be exercised without launching real agents.
  *
  *   node web/demo-fixtures.mjs <runsRoot> <projectDir>
  *

@@ -1,5 +1,5 @@
 /**
- * Tiny zero-dependency i18n for the read-only client.
+ * Tiny zero-dependency i18n for the client.
  *
  * Strategy: the English source string IS the key. `t("Settings")` returns the
  * English text as-is when the language is `en`; in `zh` it looks up a Chinese
@@ -74,6 +74,7 @@ const ZH: Record<string, string> = {
   connecting: "连接中",
   reconnecting: "重新连接",
   "fan out coding agents": "并行调度编码智能体",
+  Chat: "对话",
   Activity: "动态",
   Workspace: "工作区",
   Jobs: "任务",
@@ -106,11 +107,6 @@ const ZH: Record<string, string> = {
   "Workflow directories": "工作流目录",
   Language: "语言",
   "switch the interface language": "切换界面语言",
-  "Launch at login": "开机时启动",
-  "keep watching runs in the background": "在后台持续监视运行",
-  "Dock badge — active run count": "程序坞角标 — 进行中的运行数",
-  "Native notification on run finish / fail": "运行完成 / 失败时发送系统通知",
-  "Notify only on failure": "仅在失败时通知",
   "This build is read-only. To start a run, your agent uses {cmd} — there is no run button by design.":
     "此版本为只读。要启动运行，你的智能体使用 {cmd}——此处刻意不设运行按钮。",
 
@@ -165,6 +161,68 @@ const ZH: Record<string, string> = {
   "Live event stream": "实时事件流",
   "all runs · events.jsonl": "全部运行 · events.jsonl",
 
+  // Chat Host.
+  "Chat Host": "对话宿主",
+  "local backend": "本地后端",
+  "+ New": "+ 新建",
+  "Host activity": "宿主动态",
+  "Linked ODW runs": "关联 ODW 运行",
+  "Tool contract": "工具协议",
+  "Codex host": "Codex 宿主",
+  "ODW bridge": "ODW 桥接",
+  "No linked ODW runs yet.": "暂无关联 ODW 运行。",
+  "Ask Codex. Mention ODW or workflow to attach a local run.":
+    "向 Codex 提问。提到 ODW 或 workflow 会关联一次本地运行。",
+  "Messages are stored by the local backend.": "消息由本地后端保存。",
+  "The local backend will store messages and linked runs.": "本地后端会保存消息和关联运行。",
+  "No chat sessions yet": "暂无对话会话",
+  "No chat sessions yet.": "暂无对话会话。",
+  "Create a hosted turn to start.": "新建一个宿主回合开始。",
+  "Create a session first.": "请先新建会话。",
+  "Choose an existing session or create a new one.": "选择已有会话或新建一个会话。",
+  "Chat session not found": "对话会话不存在",
+  "Open latest session": "打开最新会话",
+  "Loading chat sessions...": "正在加载对话会话...",
+  "No messages yet.": "暂无消息。",
+  "Waiting for events...": "等待事件...",
+  "live data": "实时数据",
+  "User message": "用户消息",
+  "Host turn": "宿主回合",
+  "Tool result": "工具结果",
+  "{n} linked runs": "{n} 个关联运行",
+  "stored by local server": "已由本地服务保存",
+  "watching ODW run": "正在观测 ODW 运行",
+  waiting: "等待中",
+  available: "可用",
+  missing: "缺失",
+  "Message text is required.": "请输入消息内容。",
+  "Sending...": "发送中...",
+  "Creating...": "新建中...",
+  Delete: "删除",
+  "Delete this chat session?": "确定删除这个对话会话吗？",
+  "Run started": "运行已开始",
+  "Run finished": "运行已完成",
+  "Run failed": "运行失败",
+  "Run stopped": "运行已停止",
+  "Phase started": "阶段已开始",
+  "Agent started": "智能体已开始",
+  "Agent finished": "智能体已完成",
+  "Agent failed": "智能体失败",
+  Log: "日志",
+  "run requested": "已请求运行",
+  "This local Chat Host session is ready. Mention ODW or workflow to attach a real ODW run to the turn.":
+    "本地对话宿主已就绪。提到 ODW 或 workflow 时，会把这个回合关联到真实的 ODW 运行。",
+  "I linked this turn to a local ODW run. The tool card will update from the run stream as it settles.":
+    "我已把这个回合关联到本地 ODW 运行。工具卡片会随着运行流自动更新。",
+  "I recorded this turn in the local Chat Host. Mention ODW or workflow when you want this conversation to attach a run.":
+    "我已把这个回合记录到本地对话宿主。需要关联运行时，提到 ODW 或 workflow 即可。",
+  "Loading settings...": "正在加载设置...",
+  "Current project": "当前项目",
+  "Config file": "配置文件",
+  "built-in defaults": "内置默认值",
+  Send: "发送",
+  You: "你",
+
   // Job detail.
   Graph: "图",
   Logs: "日志",
@@ -193,6 +251,8 @@ const ZH: Record<string, string> = {
   "⚠ worker lost contact": "⚠ worker 失联",
   "⚠ no recent signal": "⚠ 近期无信号",
   "Waiting for the first agent…": "等待第一个智能体…",
+  "No agent calls in this run": "本次运行没有调用智能体",
+  "This run only recorded phases and a result.": "本次运行只记录了阶段和结果。",
   "Declared phases:": "已声明的阶段：",
   "No events yet.": "暂无事件。",
   "No result yet": "暂无结果",
@@ -214,52 +274,13 @@ const ZH: Record<string, string> = {
   Today: "今天",
   Yesterday: "昨天",
 
-  // Native notifications (built in the web layer, shown by the Tauri shell).
-  "{name} failed": "{name} 运行失败",
-  "{failed} of {agents} agents failed": "{agents} 个智能体中 {failed} 个失败",
-  "{name} stopped": "{name} 已停止",
-  "Run was stopped": "运行已停止",
-  "{name} finished": "{name} 已完成",
-  "{agents} agents": "{agents} 个智能体",
-  // Launch view + the launch-layer affordances (preview / save / stop).
-  Launch: "发射台",
-  "Describe a task. The system generates a dynamic workflow — preview it, run it, watch it live in Jobs.":
-    "描述一个任务，系统会生成一个 dynamic workflow——预览确认后运行，全程在任务页实时观测。",
-  Task: "任务",
-  "e.g. Review the auth module for race conditions; have a second agent verify every finding adversarially.":
-    "例如：审查 auth 模块的竞态条件；由第二个 agent 对每个发现做对抗性核实。",
-  Agent: "智能体",
-  "Source directory": "工作目录",
-  "optional — point at a project the workflow should read; blank runs in a scratch dir": "可选——指向 workflow 需要读取的项目目录;留空则在临时草稿目录运行",
-  "not installed": "未安装",
-  "loading adapters…": "加载适配器…",
-  "agent permissions": "智能体权限",
-  "⚡ Generate workflow": "⚡ 生成 workflow",
-  "Generating…": "生成中…",
-  "Generation itself runs as a workflow — you can watch it in Jobs.":
-    "生成过程本身就是一个 workflow——可以在任务页观测。",
+  // Run affordances.
   "⏹ Stop": "⏹ 停止",
-  "This dashboard is read-only (served off-loopback). Run it from the local app or CLI.": "此看板为只读（绑定在非回环地址）。请用本地 App 或 CLI 运行。",
   "Read-only dashboard": "只读看板",
-  "This dashboard is served off-loopback, so it can only observe. Start runs from the local app or the CLI.": "此看板绑定在非回环地址，只能观测。请用本地 App 或 CLI 发起运行。",
-  "generated — review before running": "已生成——运行前请确认",
-  "▶ Run workflow": "▶ 运行 workflow",
-  "↻ Regenerate": "↻ 重新生成",
-  "Keep this workflow?": "保留这个 workflow？",
-  "workflow name": "workflow 名称",
-  "global (~/.odw/workflows)": "全局（~/.odw/workflows）",
-  "project (<source>/.odw/workflows)": "项目（<source>/.odw/workflows）",
-  "☆ Save to Workspace": "☆ 收藏到工作区",
-  "Saving…": "保存中…",
-  "saved to {path}": "已保存到 {path}",
-  "open Workspace": "打开工作区",
-  "Launch a task here, or have your agent start one with the CLI.":
-    "在这里发起一个任务，或让你的 agent 用 CLI 发起。",
-  "Generate one from a task in Launch, or have your agent write one into the managed directories.":
-    "在发射台用一个任务生成，或让你的 agent 写入受管目录。",
-  "⚡ Open Launch": "⚡ 打开发射台",
-  "Runs start from the Launch tab or from your agent via {cmd}. Claude Code runs stay strictly read-only.":
-    "运行可从发射台发起，也可由你的 agent 通过 {cmd} 发起。Claude Code 的运行始终严格只读。",
+  "Have your agent start one with the CLI.": "让你的 agent 用 CLI 发起一个运行。",
+  "Have your agent write one into the managed directories.": "让你的 agent 写入受管目录。",
+  "Runs start from your agent via {cmd}. Claude Code runs stay strictly read-only.":
+    "运行由你的 agent 通过 {cmd} 发起。Claude Code 的运行始终严格只读。",
   "Agents are never re-run from here. An ODW run can be stopped from the header; Claude Code runs stay read-only.":
     "这里不会重跑任何 agent。ODW 运行可从顶部停止；Claude Code 运行保持只读。",
 };

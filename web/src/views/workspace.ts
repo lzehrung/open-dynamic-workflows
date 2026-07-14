@@ -125,8 +125,7 @@ export function renderWorkspace(activeKey: string | null, detail: WorkflowDetail
   if (list.length === 0) {
     return (
       `<div class="empty"><div class="gh">${t("No workflows yet")}</div>` +
-      `<div>${t("Generate one from a task in Launch, or have your agent write one into the managed directories.")}</div>` +
-      `<span class="btn primary" data-nav="#/launch">${t("⚡ Open Launch")}</span>` +
+      `<div>${t("Have your agent write one into the managed directories.")}</div>` +
       `<div class="codehint">.odw/workflows · .claude/workflows · ~/.odw/workflows · ~/.claude/workflows</div></div>`
     );
   }

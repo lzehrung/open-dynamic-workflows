@@ -25,7 +25,6 @@ function mockConfig(root: string, extra: Record<string, unknown> = {}): string {
     path,
     JSON.stringify({
       defaultAdapter: "mock",
-      workspaceMode: "inplace",
       adapters: {
         mock: {
           command: [

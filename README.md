@@ -6,12 +6,12 @@
 
 **Dynamic workflows for coding agents.** An open runtime that turns Codex, Claude Code,
 Gemini, Qwen and Kimi into orchestrated fleets — same scripts as Claude Code's own
-Workflow tool, plus a desktop app that generates, launches, and watches every run live.
+Workflow tool, plus a web dashboard that chats with Codex and watches every run live.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/Node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](tsconfig.json)
-[![tests](https://img.shields.io/badge/tests-235%20passing-brightgreen.svg)](tests)
+[![tests](https://img.shields.io/badge/tests-256%20passing-brightgreen.svg)](tests)
 [![runtime deps](https://img.shields.io/badge/runtime%20deps-0-blue.svg)](package.json)
 
 [English](README.md) · [简体中文](README.zh-CN.md)
@@ -55,7 +55,7 @@ mode you have probably met; each mechanism is a runnable pattern in this repo:
 | **One-shot quality lottery** | N approaches compete, pairwise judging picks a survivor ([`tournament.js`](examples/tournament.js)) |
 | **Serial waiting** | `parallel()` fans subtasks across dozens of agent processes under a bounded semaphore ([`fan-out-reduce.js`](examples/fan-out-reduce.js)) |
 | **Context pollution** — long work trashes the host agent's window | Runs are detached background workers; only the final `return` value comes back |
-| **Invisible long runs** | Every run is a live DAG — browser dashboard, desktop observatory, or `odw logs --follow` |
+| **Invisible long runs** | Every run is a live DAG — browser dashboard or `odw logs --follow` |
 
 ## Highlights
 
@@ -65,10 +65,9 @@ mode you have probably met; each mechanism is a runnable pattern in this repo:
   `agent` / `parallel` / `pipeline` / `phase` / `log` / `args` / `budget` /
   `workflow` globals (nested workflows included), with top-level `await` and
   `return`. A script written for Claude Code runs here as-is, and vice versa.
-- **A launch pad, not just a viewer** — describe a task in the app, an agent
-  generates the workflow (generation itself runs as a workflow), you preview the
-  script and its agent permissions, run it, watch the live DAG, and save keepers
-  to your workspace.
+- **A live observatory with Chat Host** — talk to Codex in the browser, mention
+  ODW or workflow to attach an asynchronous run, and watch CLI-launched jobs as
+  live DAGs without polluting the host agent's context.
 - **Out of context, at scale** — the plan lives in code, so intermediate work
   never pollutes the host's context and you can fan out dozens of subagents.
 - **Reliable hand-offs** — JSON-Schema structured outputs, validated and retried,
@@ -90,7 +89,7 @@ standalone:
   adapters.
 - **Out of band** — runs are detached background workers backed by a run
   directory, so you can `status` / `logs --follow` / `pause` / `stop` them and
-  watch from a browser or the desktop app — independent of any host agent session.
+  watch from the browser — independent of any host agent session.
 - **Portable artifacts** — the workflows the Claude Code ecosystem is already
   producing become files you can version, share, and run anywhere.
 
@@ -148,6 +147,10 @@ for the skill). For now, use the binary above.
 > *drives* (`claude`, `codex`, …) remain their own CLIs you install separately.
 
 ## Quick start
+
+One CLI installed (just `claude`, or just `codex`)? Zero config — skip ahead.
+Several? The installer already asked you to pick a default; `odw init` re-opens
+that choice anytime (agents use `odw init --adapter <name>` after asking you).
 
 ODW is mostly driven **by your coding agent**, not by hand. With the skill and
 binary installed, just ask your agent for something big — it writes a workflow and
@@ -216,19 +219,33 @@ reproducibility. Full reference: [`skills/open-dynamic-workflows/references/prim
 
 ## Run and observe
 
-The `odw` CLI starts a script in a background worker (fire-and-poll) and lets you
-watch it. `--wait` blocks and prints the result.
+In an interactive terminal, `odw run` attaches a **live foreground view** — every
+agent as it starts, spins, and settles, phase by phase, with the result printed
+at the end. Ctrl-C detaches (the run keeps going); `odw attach <id>` re-attaches.
 
 ```bash
-odw run wf.js [--args JSON|@file] [--wait]   # start (background); --wait blocks & prints result
+odw run wf.js [--args JSON|@file]            # foreground in a terminal; run keeps its own worker
                                              #   --adapter <name> sets this run's default agent
-                                             #   --timeout <s> caps the wait; --budget <tokens> sets budget.total
-odw status <id>          # state + agent count
-odw logs <id> --follow   # stream progress events
-odw result <id>          # final value
-odw pause|resume|stop <id>
+                                             #   --budget <tokens> sets budget.total
+```
+
+The run itself always executes in a detached background worker. Anywhere your
+shell is not a terminal — `$(…)` capture, pipes, cron, CI, another agent — the
+same command detaches and prints the run id, exactly as before (fire-and-poll):
+
+```bash
+RUN=$(odw run wf.js)     # non-TTY: prints the run id and returns immediately
+odw attach $RUN          # live view (or plain lines when piped); --timeout <s> exits 124
+odw status $RUN          # state + agent count
+odw logs $RUN --follow   # stream raw progress events
+odw result $RUN          # final value
+odw pause|resume|stop $RUN
 odw list
 ```
+
+`--fg` / `-d, --detach` / `--wait` (block, then print the result; a single
+run-id line on stderr) force a mode explicitly; `ODW_DETACH=1` forces
+background from the environment.
 
 A run executes in a detached worker process and persists everything to a run
 directory, so it outlives the command that started it and can be observed from
@@ -250,8 +267,8 @@ odw serve --port 8080 --host 0.0.0.0    # custom port / bind address
 
 ![odw serve — a live board of a deep-research run: phase columns (Search → Extract → Vote → Report), per-agent cards with adapter and elapsed time, and live status](assets/odw-dashboard.png)
 
-**Prefer a native app?** The same dashboard ships as a read-only desktop
-**observatory** (a Tauri shell) that keeps runs visible from the Dock / tray:
+Two more of its views — **Activity** (live event stream) and **Job detail**
+(the run as a live DAG):
 
 <table>
   <tr>
@@ -266,52 +283,29 @@ odw serve --port 8080 --host 0.0.0.0    # custom port / bind address
   </tr>
 </table>
 
-## Launch: task in → running workflow out
+## Dashboard: chat, observe, inspect
 
-The app is a launch pad as well as an observatory. Describe a task and pick an
-agent; ODW **generates a dynamic workflow** for it — the generation itself runs
-as a workflow (`Generate → Validate → Repair`), so you watch it as a live DAG
-like any other job:
-
-<table>
-  <tr>
-    <td width="50%">
-      <strong>1 · Describe the task</strong><br />
-      <img src="assets/app-screenshots/launch.png" alt="Launch view: task description, agent picker with permission note, source directory" />
-    </td>
-    <td width="50%">
-      <strong>2 · Preview, then decide</strong><br />
-      <img src="assets/app-screenshots/launch-preview.png" alt="Generated workflow preview: phase pills, syntax-highlighted script, agent permission note, Run and Regenerate buttons" />
-    </td>
-  </tr>
-</table>
-
-Nothing runs until you press **Run** — the preview shows the generated script,
-its phases, and exactly what permission posture the chosen agent will run with.
-After the run, **Save to Workspace** turns a good one-off into a named, reusable
-workflow (`odw run <name>` works immediately).
-
-<div align="center">
-  <img src="assets/app-screenshots/launch-live-run.png" alt="The generated adversarial-review workflow running live: a finder agent fans out to three parallel refuter agents, with a Stop button in the header" width="720" />
-  <br /><sub><b>A real run of a generated workflow.</b> Task: “adversarially review <code>rate-limiter.js</code>”. The generated script's finder reported 3 candidate bugs; three parallel refuters then killed the plausible-but-wrong one (a “race” that can't actually interleave in single-threaded Node) and confirmed the two real ones — exactly what adversarial verification is for.</sub>
-</div>
-
-The same flow is scriptable:
+The dashboard is an observatory plus a local Chat Host. Use Chat for ordinary
+Codex conversation; mention ODW or workflow when a turn should be attached to a
+real background run. Runs started from the CLI (`odw run <name>`) and Chat-linked
+ODW tasks show up in Jobs as live DAGs with logs and final results.
 
 ```bash
-curl -X POST http://127.0.0.1:4317/api/generate \
-  -H 'content-type: application/json' \
-  -d '{"task": "adversarially review src/rate-limiter.js", "adapter": "claude"}'
+odw run adversarial-verify --args '{"question":"review src/rate-limiter.js"}'
+odw logs --workflow adversarial-verify --follow
 ```
 
-Write endpoints are loopback-only with CSRF/DNS-rebinding guards; binding
-`--host` off-loopback keeps the dashboard readable but refuses every write.
+The dashboard can be viewed off-loopback, but local write operations such as
+Chat messages and stopping ODW-owned runs stay guarded by the loopback server.
 Claude Code's own runs stay strictly read-only.
 
 ## Configure adapters
 
-Codex, Claude Code, Gemini, Qwen, and Kimi work out of the box. To change the
-default, tune flags, or add your own CLI, drop an `odw.config.json` (see
+Codex, Claude Code, Gemini, Qwen, and Kimi work out of the box. `odw init`
+shows what's installed (with each CLI's permission posture) and sets the
+default — interactively at a terminal, as a plain report anywhere else, and
+`odw init --adapter <name>` writes the choice without prompting. To tune flags
+or add your own CLI, drop an `odw.config.json` (see
 [`odw.config.example.json`](odw.config.example.json)) in the project root,
 `~/.config/odw/config.json`, or pass `--config`. ODW only shells out to local
 commands — it never calls model APIs directly.
@@ -415,30 +409,31 @@ into the host's `node`, so each target is built on its own runner.
 
 ## Status
 
-**What's new (unreleased, on `main`):** the **launch layer** — the app upgrades
-from observatory to launch pad. Describe a task → an agent **generates a
-workflow** (generation runs as a workflow, watchable live) → preview the script
-+ agent permissions → run → save keepers to the Workspace. Under the hood the
-dialect got **complete**: nested `workflow()` is implemented (shared scheduler/
-budget, one level deep), `budget.spent()` does real (estimated) accounting so
-`--budget` is a hard ceiling, plus `odw run --adapter <name>`, inline-source
-runs archived in their run directory, and a `validate()` primitive so workflows
-can generate workflows.
+**What's new (unreleased, on `main`):** the dashboard now includes a local
+**Chat Host** that can hand ODW-mentioned turns to a real asynchronous ODW run
+and resume the session when the result returns, and the desktop (Tauri) app has
+been **retired** — the web dashboard via `odw serve` is the single client on
+every platform. Under the hood the dialect got
+**complete**: nested `workflow()` is implemented (shared scheduler/budget, one
+level deep), `budget.spent()` does real (estimated) accounting so `--budget` is
+a hard ceiling, plus `odw run --adapter <name>`, inline-source runs archived in
+their run directory, and a `validate()` primitive so workflows can generate
+workflows.
 
 **v0.3.0:** the **Jobs** tab also surfaces **Claude Code's own workflow runs** —
 finished history and live in-flight jobs — read-only, merged alongside ODW's own
-runs. (v0.2.4 added the desktop **observatory** app itself.) See
+runs. See
 [Releases](https://github.com/xz1220/open-dynamic-workflows/releases).
 
 **Core runtime is shipped.** The full runtime is on `main` — the adapter layer, execution
 bridge, workspace isolation, the async scheduler, the injected primitives, the
 loader/transform, the JSON-Schema engine, the background runtime, and the `odw`
-CLI. **235 tests pass**, and the flagship [`examples/deep-research.js`](examples/deep-research.js)
+CLI. **256 tests pass**, and the flagship [`examples/deep-research.js`](examples/deep-research.js)
 runs end-to-end (plan → gather → verify → synthesize → critique).
 
 ### Roadmap (v1.5+)
 
-`model` / `agentType` rich routing · git-worktree `isolation` · adapter-reported
+`model` / `agentType` rich routing · adapter-reported
 token usage (today's budget meters an estimate) · resume / journaling · a
 `Date.now`/`Math.random` sandbox for replay-determinism. Full plan:
 [`docs/dynamic-workflows-tech-plan.md`](docs/dynamic-workflows-tech-plan.md).
@@ -469,8 +464,8 @@ workflows, not to be the orchestration.
 
 Those orchestrate API calls and custom nodes. ODW orchestrates <b>coding-agent
 CLIs</b> — the agents you already pay for and configure (Codex, Claude Code,
-Gemini, …) — in their own working directories, with workspace isolation and
-diffs. There is no DSL and no server farm: a workflow is one plain JavaScript
+Gemini, …) — in the run's own working directory, with opt-in per-agent
+workspace isolation and diffs. There is no DSL and no server farm: a workflow is one plain JavaScript
 file in Claude Code's existing dialect, and the engine is a zero-dependency
 Node CLI.
 </details>
@@ -491,11 +486,11 @@ any off-loopback bind refuses writes entirely (the dashboard stays readable).
 </details>
 
 <details>
-<summary><b>Is the desktop app available for Linux / Windows?</b></summary>
+<summary><b>What happened to the desktop app?</b></summary>
 
-Not yet — macOS first (the web dashboard via <code>odw serve</code> is
-cross-platform today). The app is a thin Tauri shell over the same single-file
-SPA, so a port is packaging work, not a rewrite.
+Retired. The app was a thin Tauri shell over the same single-file SPA that
+<code>odw serve</code> already serves, so the web dashboard is now the single
+client — cross-platform, nothing to install beyond <code>odw</code> itself.
 </details>
 
 ## Star history

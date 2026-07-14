@@ -10,7 +10,6 @@ import { number, obj } from "../src/schema.js";
 function cfg() {
   const c = defaultConfig();
   c.settings.defaultAdapter = "claude";
-  c.settings.workspaceMode = "inplace";
   return c;
 }
 const ok = (stdout: string): CliResult => ({ returncode: 0, stdout, stderr: "", timedOut: false, duration: 0 });

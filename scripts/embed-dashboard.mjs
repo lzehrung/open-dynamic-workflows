@@ -8,7 +8,7 @@
  * esbuild bundles it straight into the single-file binary. JSON.stringify gives
  * a normal double-quoted literal, so the HTML's own backticks/`${}` are inert.
  *
- * Source preference: the built read-only client SPA (`web/dist/index.html`) when
+ * Source preference: the built client SPA (`web/dist/index.html`) when
  * present, else the legacy single-file `src/dashboard.html`. This keeps the
  * "one bundle, two hosts" promise — `odw serve` and the SEA binary both embed the
  * SAME artifact — while letting a checkout without a web build still serve.
@@ -26,7 +26,7 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const spa = `${root}web/dist/index.html`;
 const legacy = `${root}src/dashboard.html`;
 const src = existsSync(spa) ? spa : legacy;
-const sourceLabel = src === spa ? "web/dist/index.html (read-only client SPA)" : "src/dashboard.html";
+const sourceLabel = src === spa ? "web/dist/index.html (client SPA)" : "src/dashboard.html";
 const out = `${root}src/dashboard.generated.ts`;
 
 const html = readFileSync(src, "utf8");

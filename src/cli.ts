@@ -17,15 +17,16 @@
 
 import { spawn } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
-import { basename } from "node:path";
+import { basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
-import { loadConfig, resolveRunsRoot } from "./adapters/config.js";
-import type { WorkflowEvent } from "./events.js";
+import { loadConfig, resolveAdapter, resolveRunsRoot } from "./adapters/config.js";
+import { AdapterNotFound } from "./errors.js";
 import { VERSION } from "./index.js";
+import { cmdInit } from "./init.js";
 import { startRun, startRunFromSource, waitFor } from "./runtime/launcher.js";
-import { recoverLoginPath } from "./runtime/login-path.js";
+import { attachRun, formatEvent, resolveRunMode, type RunMode } from "./runtime/live-view.js";
 import { RunStore, TERMINAL_STATES } from "./runtime/run-store.js";
 import { startServer } from "./runtime/server.js";
 import { executeRun } from "./runtime/worker.js";
@@ -33,7 +34,9 @@ import { isSeaBinary } from "./sea.js";
 import { listWorkflows, resolveWorkflow } from "./workflows/resolve.js";
 
 export const COMMANDS = [
+  "init",
   "run",
+  "attach",
   "rerun",
   "list",
   "status",
@@ -60,7 +63,9 @@ export function helpText(): string {
     "Run Claude Code-format dynamic-workflow scripts against any coding-agent CLI.",
     "",
     "Usage:",
-    "  odw run <script.js|name> [--args JSON|@file] [--wait]  start a workflow (background)",
+    "  odw init [--adapter <name>] [--check]              pick the default agent CLI (first-time setup)",
+    "  odw run <script.js|name> [--args JSON|@file]       start a workflow (see modes below)",
+    "  odw attach <run_id>                                attach the live foreground view to a run",
     "  odw rerun <run_id>                                 start a fresh run with the same inputs",
     "  odw status <run_id>                                show a run's current state",
     "  odw logs <run_id|--workflow name> [--follow]       print a run's progress events",
@@ -77,9 +82,16 @@ export function helpText(): string {
     "  --runs-root <dir>   directory runs are stored under",
     "  --source <dir>      run's working dir; also anchors a relative script path & project-name lookup",
     "  --adapter <name>    default agent() adapter for this run (explicit agent(p,{adapter}) still wins)",
-    "  --wait              block until the run finishes and print the result",
-    "  --timeout <s>       with --wait: stop waiting after s seconds (the run itself continues)",
+    "  --fg                run in the foreground: live progress on a TTY, plain event lines otherwise",
+    "  -d, --detach        start in the background and print the run id",
+    "  --wait              block until the run finishes, then print the result (one run-id line on stderr)",
+    "  --timeout <s>       with --fg/--wait/attach: give up after s seconds, exit 124 (run continues)",
     "  --budget <tokens>   token target exposed to the script as budget.total",
+    "",
+    "Run modes (odw run / rerun):",
+    "  interactive terminal        attaches in the foreground (Ctrl-C detaches; the run keeps going)",
+    "  piped / captured / CI       detaches and prints the run id — `RUN=$(odw run wf.js)` stays correct",
+    "  ODW_DETACH=1                forces detach; explicit --fg/--wait/--detach always win",
     "  --port <n>          dashboard port (serve; default 4317)",
     "  --host <addr>       dashboard bind address (serve; default 127.0.0.1)",
     "  --open              open the dashboard in the default browser (serve)",
@@ -107,10 +119,14 @@ export async function main(argv: string[]): Promise<number> {
         // Hidden: the worker entrypoint a background run re-execs into. In a SEA
         // binary there is no separate worker.js, so the binary calls itself here.
         return await cmdWorker(rest);
+      case "init":
+        return await cmdInitCli(rest);
       case "run":
         return await cmdRun(rest);
+      case "attach":
+        return await cmdAttach(rest);
       case "rerun":
-        return cmdRerun(rest);
+        return await cmdRerun(rest);
       case "status":
         return cmdStatus(rest);
       case "result":
@@ -152,6 +168,23 @@ async function cmdWorker(rest: string[]): Promise<number> {
   return state === "done" ? 0 : 1;
 }
 
+/** `odw init` — detect agent CLIs and set/inspect the default (see src/init.ts). */
+async function cmdInitCli(rest: string[]): Promise<number> {
+  const { values } = parseArgs({
+    args: rest,
+    options: {
+      adapter: { type: "string" },
+      check: { type: "boolean" },
+      config: { type: "string" },
+    },
+  });
+  return cmdInit({
+    ...(values.adapter !== undefined ? { adapter: values.adapter } : {}),
+    check: values.check === true,
+    config: values.config ?? null,
+  });
+}
+
 async function cmdRun(rest: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args: rest,
@@ -163,6 +196,8 @@ async function cmdRun(rest: string[]): Promise<number> {
       source: { type: "string" },
       adapter: { type: "string" },
       wait: { type: "boolean" },
+      fg: { type: "boolean" },
+      detach: { type: "boolean", short: "d" },
       timeout: { type: "string" },
       budget: { type: "string" },
     },
@@ -192,6 +227,24 @@ async function cmdRun(rest: string[]): Promise<number> {
     timeoutMs = seconds * 1000;
   }
 
+  const resolved = resolveRunMode(
+    { fg: values.fg === true, detach: values.detach === true, wait: values.wait === true },
+    { stdoutTTY: process.stdout.isTTY === true, stderrTTY: process.stderr.isTTY === true },
+    process.env,
+  );
+  if ("usageError" in resolved) {
+    process.stderr.write(`odw run: ${resolved.usageError}\n`);
+    return 2;
+  }
+  if (values.timeout !== undefined && resolved.mode === "detach") {
+    process.stderr.write(
+      "odw run: --timeout needs --wait or --fg (a detached start returns immediately)\n",
+    );
+    return 2;
+  }
+
+  warnIfNoDefaultAdapter(values.adapter ?? null, values.config ?? null, values.source ?? null, "run");
+
   const { runId, store } = startRun(ref, {
     args: parseArgsValue(values.args),
     configPath: values.config ?? null,
@@ -201,15 +254,107 @@ async function cmdRun(rest: string[]): Promise<number> {
     budgetTotal,
   });
 
-  if (!values.wait) {
+  return afterStart(store, runId, resolved.mode, { timeoutMs, hint: "started run" });
+}
+
+/**
+ * Launch-time preflight: a missing/ambiguous default adapter is knowable NOW,
+ * but a detached start would defer it into the run — the launch prints a run id,
+ * exits 0, and the failure is only visible in `odw status`. Surface it here.
+ * A warning, not an error: workflows that name adapters per call never need a
+ * default, so the launch must not be blocked. Quiet load — the launcher's own
+ * loadConfig lints the same file right after. The worker runs with cwd =
+ * --source, so the project-local config is resolved against source, not the
+ * launcher's cwd — else this would warn about a config the run never reads
+ * (and stay silent about the one it does). Exported for tests.
+ */
+export function warnIfNoDefaultAdapter(
+  adapter: string | undefined | null,
+  configPath: string | null,
+  source: string | null,
+  command: string,
+): void {
+  if (adapter != null) return;
+  try {
+    resolveAdapter(
+      loadConfig(configPath, { quiet: true, ...(source ? { cwd: resolve(source) } : {}) }),
+    );
+  } catch (err) {
+    if (!(err instanceof AdapterNotFound)) return; // a broken config file fails the launch itself
+    process.stderr.write(
+      `odw ${command}: warning: bare agent() calls in this run will fail — ${err.message}\n`,
+    );
+  }
+}
+
+/**
+ * What run/rerun do once the detached worker is spawned, per the resolved mode.
+ * The run itself is identical in all three: only the viewer differs.
+ */
+async function afterStart(
+  store: RunStore,
+  runId: string,
+  mode: RunMode,
+  opts: { timeoutMs?: number; hint: string },
+): Promise<number> {
+  if (mode === "detach") {
     process.stdout.write(runId + "\n");
-    process.stderr.write(`started run ${runId} (use 'odw status ${runId}')\n`);
+    process.stderr.write(`${opts.hint} ${runId} (use 'odw status ${runId}')\n`);
     return 0;
   }
+  if (mode === "wait") {
+    process.stderr.write(`running ${runId} ...\n`);
+    const status = await waitFor(store, runId, { timeoutMs: opts.timeoutMs });
+    if (!TERMINAL_STATES.has(String(status.state))) {
+      process.stderr.write(
+        `timed out waiting for ${runId} — run continues (odw attach ${runId})\n`,
+      );
+      return 124;
+    }
+    return reportTerminal(store, runId, status);
+  }
+  return attachRun(store, runId, {
+    out: process.stdout,
+    err: process.stderr,
+    timeoutMs: opts.timeoutMs,
+  });
+}
 
-  process.stderr.write(`running ${runId} ...\n`);
-  const status = await waitFor(store, runId, { timeoutMs });
-  return reportTerminal(store, runId, status);
+/** `odw attach <run_id>` — (re)attach the foreground view to an existing run. */
+async function cmdAttach(rest: string[]): Promise<number> {
+  const { values, positionals } = parseArgs({
+    args: rest,
+    allowPositionals: true,
+    options: {
+      config: { type: "string" },
+      "runs-root": { type: "string" },
+      timeout: { type: "string" },
+    },
+  });
+  const runId = positionals[0];
+  if (!runId) {
+    process.stderr.write("odw attach: missing <run_id>\n");
+    return 2;
+  }
+  const store = storeFrom(values);
+  if (!store.exists(runId)) {
+    process.stderr.write(`no such run: ${runId}\n`);
+    return 1;
+  }
+  let timeoutMs: number | undefined;
+  if (values.timeout !== undefined) {
+    const seconds = Number(values.timeout);
+    if (!Number.isFinite(seconds) || seconds < 0) {
+      process.stderr.write("odw attach: --timeout must be a non-negative number of seconds\n");
+      return 2;
+    }
+    timeoutMs = seconds * 1000;
+  }
+  return attachRun(store, runId, {
+    out: process.stdout,
+    err: process.stderr,
+    timeoutMs,
+  });
 }
 
 function cmdStatus(rest: string[]): number {
@@ -305,16 +450,47 @@ function cmdList(rest: string[]): number {
 }
 
 /** `odw rerun <run_id>` — start a fresh run with the same inputs as an existing one. */
-function cmdRerun(rest: string[]): number {
+async function cmdRerun(rest: string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args: rest,
     allowPositionals: true,
-    options: { config: { type: "string" }, "runs-root": { type: "string" } },
+    options: {
+      config: { type: "string" },
+      "runs-root": { type: "string" },
+      wait: { type: "boolean" },
+      fg: { type: "boolean" },
+      detach: { type: "boolean", short: "d" },
+      timeout: { type: "string" },
+    },
   });
   const runId = positionals[0];
   if (!runId) {
     process.stderr.write("odw rerun: missing <run_id>\n");
     return 2;
+  }
+  const resolved = resolveRunMode(
+    { fg: values.fg === true, detach: values.detach === true, wait: values.wait === true },
+    { stdoutTTY: process.stdout.isTTY === true, stderrTTY: process.stderr.isTTY === true },
+    process.env,
+  );
+  if ("usageError" in resolved) {
+    process.stderr.write(`odw rerun: ${resolved.usageError}\n`);
+    return 2;
+  }
+  if (values.timeout !== undefined && resolved.mode === "detach") {
+    process.stderr.write(
+      "odw rerun: --timeout needs --wait or --fg (a detached start returns immediately)\n",
+    );
+    return 2;
+  }
+  let timeoutMs: number | undefined;
+  if (values.timeout !== undefined) {
+    const seconds = Number(values.timeout);
+    if (!Number.isFinite(seconds) || seconds < 0) {
+      process.stderr.write("odw rerun: --timeout must be a non-negative number of seconds\n");
+      return 2;
+    }
+    timeoutMs = seconds * 1000;
   }
   const store = storeFrom(values);
   if (!store.exists(runId)) {
@@ -335,11 +511,16 @@ function cmdRerun(rest: string[]): number {
     adapter: (meta.adapter as string | null) ?? null,
     budgetTotal: (meta.budgetTotal as number | null) ?? null,
   };
+  warnIfNoDefaultAdapter(opts.adapter, opts.configPath, opts.source, "rerun");
   // An inline-launched run's script lives inside the OLD run dir. Re-archive its
   // source into the NEW run (via startRunFromSource) rather than pointing the new
   // run back at the old directory — so it stays self-contained and is correctly
   // flagged inline (no spurious run-by-name divergence note).
-  let newId: string;
+  //
+  // Observe the NEW run through the store the launcher actually created it in
+  // (the old run's configPath may point runsRoot somewhere the CLI-flag store
+  // does not) — never through the store the OLD run was located with.
+  let started: { runId: string; store: RunStore };
   if (meta.inline === true) {
     let sourceCode: string;
     try {
@@ -348,13 +529,18 @@ function cmdRerun(rest: string[]): number {
       process.stderr.write(`run ${runId}: its archived script is gone, cannot rerun\n`);
       return 1;
     }
-    newId = startRunFromSource(sourceCode, { ...opts, allowInvalid: true, origin: (meta.origin as string | null) ?? null }).runId;
+    started = startRunFromSource(sourceCode, {
+      ...opts,
+      allowInvalid: true,
+      origin: (meta.origin as string | null) ?? null,
+    });
   } else {
-    newId = startRun(script, opts).runId;
+    started = startRun(script, opts);
   }
-  process.stdout.write(newId + "\n");
-  process.stderr.write(`re-running ${runId} as ${newId} (use 'odw status ${newId}')\n`);
-  return 0;
+  return afterStart(started.store, started.runId, resolved.mode, {
+    timeoutMs,
+    hint: `re-running ${runId} as`,
+  });
 }
 
 async function cmdServe(rest: string[]): Promise<number> {
@@ -369,20 +555,6 @@ async function cmdServe(rest: string[]): Promise<number> {
       open: { type: "boolean" },
     },
   });
-
-  // A desktop-app launch reaches us with launchd's stripped PATH; recover the
-  // login shell's real PATH (no-op for a terminal launch) BEFORE any adapter is
-  // detected or a worker is spawned, so both find the agent CLIs. A one-line
-  // breadcrumb on the GUI path (the sidecar drains stderr to its log) makes the
-  // "works in terminal, not in the app" report diagnosable.
-  const recovery = recoverLoginPath();
-  if (recovery.outcome === "recovered") {
-    process.stderr.write(`odw serve: recovered ${recovery.added.length} PATH dir(s) from the login shell\n`);
-  } else if (recovery.outcome === "failed") {
-    process.stderr.write(
-      "odw serve: could not recover the login shell PATH — agent CLIs installed outside the launch PATH may read as 'not installed'\n",
-    );
-  }
 
   const port = values.port === undefined ? 4317 : Number(values.port);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -586,20 +758,6 @@ export function parseArgsValue(raw?: string): unknown {
     }
     return text; // a plain string that isn't JSON, e.g. --args hello
   }
-}
-
-function formatEvent(ev: WorkflowEvent): string {
-  const stamp = new Date(((ev.ts as number) ?? 0) * 1000).toLocaleTimeString();
-  const type = String(ev.type ?? "?");
-  const phase = ev.phase ? ` (${String(ev.phase)})` : "";
-  let detail = "";
-  if (type === "log") detail = String(ev.message ?? "");
-  else if (type === "phase_started") detail = `phase: ${String(ev.phase ?? "")}`;
-  else if (type.startsWith("agent_")) {
-    detail = String(ev.label ?? "agent");
-    if (type === "agent_failed") detail += ` — ${String(ev.error ?? "")}`;
-  } else detail = String(ev.error ?? ev.runId ?? "");
-  return `[${stamp}] ${type.padEnd(15)}${phase} ${detail}`.trimEnd();
 }
 
 function baseName(path: string | undefined): string {

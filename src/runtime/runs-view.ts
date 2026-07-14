@@ -29,6 +29,8 @@ import { RunStore, TERMINAL_STATES } from "./run-store.js";
 export type AgentState = "running" | "done" | "failed" | "stale";
 
 export interface AgentView {
+  /** Stable per-dispatch id from the engine (null for pre-agentId event files). */
+  agentId: number | null;
   /** Display label (the `label`/adapter/`agent` passed to agent()). */
   label: string;
   /** Phase the call was made under, or null if none was active. */
@@ -90,7 +92,7 @@ export interface RunDetail extends RunSummary {
   phaseOrder: string[];
   hasResult: boolean;
   error: { error?: string; stack?: string } | null;
-  /** Where the run was initiated from (meta.origin, e.g. "launch"); null for CLI runs. */
+  /** Where the run was initiated from (meta.origin, e.g. "chat"); null for CLI runs. */
   origin: string | null;
   /** Run-level adapter override recorded at launch (meta.adapter), if any. */
   adapter: string | null;
@@ -140,57 +142,80 @@ export function reconcileState(rawState: string, pid: number | null): {
 /**
  * Fold the event stream into a list of agent runs, in start order.
  *
- * Each agent_started opens a new node; the next matching (label+phase)
- * agent_finished/agent_failed that is still open settles it. Opening a fresh
- * node per start (rather than keying by label) keeps loop-until-dry workflows
- * honest — the same label dispatched across rounds shows as distinct runs.
+ * Each agent_started opens a new node. A finish/fail event settles the open
+ * node carrying the same `agentId` when the event has one (exact pairing);
+ * legacy events without agentId fall back to the oldest still-running
+ * label+phase match. Opening a fresh node per start (rather than keying by
+ * label) keeps loop-until-dry workflows honest — the same label dispatched
+ * across rounds shows as distinct runs.
  */
 export function foldAgents(events: WorkflowEvent[]): AgentView[] {
   const agents: AgentView[] = [];
-  const key = (label: unknown, phase: unknown) => `${String(phase ?? "")}\u0000${String(label ?? "")}`;
-
-  for (const ev of events) {
-    if (ev.type === "agent_started") {
-      agents.push({
-        label: String(ev.label ?? "agent"),
-        phase: ev.phase != null ? String(ev.phase) : null,
-        state: "running",
-        adapter: ev.adapter != null ? String(ev.adapter) : null,
-        attempts: null,
-        error: null,
-        startedAt: typeof ev.ts === "number" ? ev.ts : null,
-        finishedAt: null,
-        durationMs: null,
-      });
-      continue;
-    }
-    if (ev.type === "agent_finished" || ev.type === "agent_failed") {
-      const k = key(ev.label, ev.phase);
-      // Settle the most recent still-running node with the same label+phase.
-      let target: AgentView | undefined;
-      for (let i = agents.length - 1; i >= 0; i--) {
-        const a = agents[i]!;
-        if (a.state === "running" && key(a.label, a.phase) === k) {
-          target = a;
-          break;
-        }
-      }
-      if (!target) continue; // a stray finish with no matching start — ignore
-      target.finishedAt = typeof ev.ts === "number" ? ev.ts : null;
-      if (target.startedAt !== null && target.finishedAt !== null) {
-        target.durationMs = Math.max(0, Math.round((target.finishedAt - target.startedAt) * 1000));
-      }
-      if (ev.type === "agent_failed") {
-        target.state = "failed";
-        target.error = ev.error != null ? String(ev.error) : null;
-      } else {
-        target.state = "done";
-        target.adapter = ev.adapter != null ? String(ev.adapter) : null;
-        target.attempts = typeof ev.attempts === "number" ? ev.attempts : null;
-      }
-    }
-  }
+  for (const ev of events) applyAgentEvent(agents, ev);
   return agents;
+}
+
+const pairKey = (label: unknown, phase: unknown) =>
+  `${String(phase ?? "")}\u0000${String(label ?? "")}`;
+
+/**
+ * Apply one event to a growing agent list — the incremental form of
+ * {@link foldAgents}, shared with the CLI's live view so every observer pairs
+ * events identically. Returns what changed: the node a start opened, or the
+ * node a finish/fail settled; `{}` for non-agent events and stray finishes.
+ */
+export function applyAgentEvent(
+  agents: AgentView[],
+  ev: WorkflowEvent,
+): { opened?: AgentView; settled?: AgentView } {
+  if (ev.type === "agent_started") {
+    const opened: AgentView = {
+      agentId: typeof ev.agentId === "number" ? ev.agentId : null,
+      label: String(ev.label ?? "agent"),
+      phase: ev.phase != null ? String(ev.phase) : null,
+      state: "running",
+      adapter: ev.adapter != null ? String(ev.adapter) : null,
+      attempts: null,
+      error: null,
+      startedAt: typeof ev.ts === "number" ? ev.ts : null,
+      finishedAt: null,
+      durationMs: null,
+    };
+    agents.push(opened);
+    return { opened };
+  }
+  if (ev.type === "agent_finished" || ev.type === "agent_failed") {
+    let target: AgentView | undefined;
+    if (typeof ev.agentId === "number") {
+      // Exact pairing: settle the open node with this dispatch id.
+      const id = ev.agentId;
+      target = agents.find((a) => a.state === "running" && a.agentId === id);
+    } else {
+      // Legacy (pre-agentId) events: settle the OLDEST still-running node with
+      // the same label+phase. Deterministic compatibility heuristic only —
+      // with concurrent same-label agents the duration/attempts attribution
+      // is best-effort, not exact.
+      const k = pairKey(ev.label, ev.phase);
+      target = agents.find(
+        (a) => a.state === "running" && a.agentId === null && pairKey(a.label, a.phase) === k,
+      );
+    }
+    if (!target) return {}; // a stray finish with no matching start — ignore
+    target.finishedAt = typeof ev.ts === "number" ? ev.ts : null;
+    if (target.startedAt !== null && target.finishedAt !== null) {
+      target.durationMs = Math.max(0, Math.round((target.finishedAt - target.startedAt) * 1000));
+    }
+    if (ev.type === "agent_failed") {
+      target.state = "failed";
+      target.error = ev.error != null ? String(ev.error) : null;
+    } else {
+      target.state = "done";
+      target.adapter = ev.adapter != null ? String(ev.adapter) : null;
+      target.attempts = typeof ev.attempts === "number" ? ev.attempts : null;
+    }
+    return { settled: target };
+  }
+  return {};
 }
 
 function countAgents(agents: AgentView[]): RunCounts {

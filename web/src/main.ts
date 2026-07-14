@@ -11,14 +11,13 @@
 import { rail, statusbar, toolbar, type Route } from "./shell";
 import { store } from "./store";
 import { renderActivity } from "./views/activity";
-import { renderJob, saveForm, type JobTab } from "./views/job";
+import { renderChat } from "./views/chat";
+import { renderJob, type JobTab } from "./views/job";
 import { renderJobs } from "./views/jobs";
-import { effectiveAdapter, launchForm, prefillLaunch, rememberDir, renderLaunch } from "./views/launch";
 import { renderSettings } from "./views/settings";
 import { orderedWorkflows, renderWorkspace, wfKey } from "./views/workspace";
 import type { WorkflowDetail } from "./types";
 import { api } from "./api";
-import { syncNative, isNative } from "./native";
 import { getLang, setLang, t as tr, type Lang } from "./i18n";
 
 /** Reflect the chosen language on <html lang> (a11y + correct CJK shaping). */
@@ -34,11 +33,20 @@ let selectedAi: number | null = null;
 let wfActive: string | null = null;
 let wfDetail: WorkflowDetail | null = null;
 let poll: number | null = null;
+let chatDraft = "";
+let activeChatId: string | null = null;
+let composingChatInput = false;
+let deferredRender = false;
+let chatScrollToBottomOnNextRender = false;
+
+const CHAT_STICKY_BOTTOM_PX = 32;
 
 function parseHash(): Route {
   const h = location.hash.replace(/^#\/?/, "");
   const [view, ...rest] = h.split("/");
   switch (view) {
+    case "chat":
+      return { view: "chat", param: rest.length ? decodeURIComponent(rest[0]!) : null };
     case "workspace":
       return { view: "workspace", param: rest.length ? decodeURIComponent(rest[0]!) : null };
     case "jobs":
@@ -55,9 +63,8 @@ function parseHash(): Route {
     }
     case "settings":
       return { view: "settings", param: null };
-    case "launch":
-      return { view: "launch", param: null };
     default:
+      if (h && view !== "activity") history.replaceState(null, "", "#/activity");
       return { view: "activity", param: null };
   }
 }
@@ -68,6 +75,14 @@ function currentRoute(): Route {
 
 function viewHtml(route: Route): string {
   switch (route.view) {
+    case "chat":
+      return renderChat(store.chatSessions, store.chat, chatDraft, activeChatId, {
+        creating: store.chatCreating,
+        sending: store.chatSending,
+        error: store.chatError,
+        missingId: store.chatMissingId,
+        writable: store.capabilities.writable,
+      });
     case "activity":
       return renderActivity();
     case "workspace":
@@ -77,19 +92,20 @@ function viewHtml(route: Route): string {
     case "job":
       return renderJob(jobTab, selectedAi);
     case "settings":
-      return renderSettings();
-    case "launch":
-      return renderLaunch();
+      return renderSettings(store.settings);
   }
 }
 
 function render(): void {
+  if (composingChatInput && document.activeElement?.id === "chat-input") {
+    deferredRender = true;
+    return;
+  }
   const route = currentRoute();
-  syncNative(store.runs); // drive Dock badge + native notifications when wrapped
+  const chatScroll = captureChatScroll(route);
   // render() is a full innerHTML swap fired on every store emit (SSE pushes,
-  // 1.2s job poll). That destroys any focused text field mid-typing — the Launch
-  // task box and the Save-to-Workspace name input. Capture focus + caret on our
-  // own form fields and restore them after the swap so typing survives a repaint.
+  // 1.2s job poll). Capture focus + caret on our own form fields and restore
+  // them after the swap so typing survives a repaint.
   const focus = captureFocus();
   root.innerHTML =
     `<div class="app">` +
@@ -99,9 +115,103 @@ function render(): void {
     statusbar() +
     `</div>`;
   restoreFocus(focus);
+  restoreChatScroll(chatScroll, route);
 }
 
-const FOCUSABLE_IDS = new Set(["lf-task", "lf-source", "lf-adapter", "save-name", "save-scope"]);
+function hasStreamingChatAssistant(): boolean {
+  return Boolean(store.chat?.messages.some((m) => m.role === "assistant" && m.status === "streaming"));
+}
+
+function refreshChatComposer(): void {
+  const btn = root.querySelector<HTMLButtonElement>("[data-chat-send]");
+  if (!btn) return;
+  const locked = store.chatSending || hasStreamingChatAssistant() || !store.capabilities.writable;
+  const canSend = Boolean(store.chat && activeChatId && chatDraft.trim() && !locked);
+  btn.disabled = !canSend;
+  btn.classList.toggle("disabled", !canSend);
+  if (canSend) btn.removeAttribute("aria-disabled");
+  else btn.setAttribute("aria-disabled", "true");
+}
+
+type ChatScrollSnapshot = { sessionId: string; scrollTop: number; nearBottom: boolean };
+
+const chatScrollBySession = new Map<string, ChatScrollSnapshot>();
+
+function renderedChatSessionId(route: Route): string | null {
+  if (route.view !== "chat") return null;
+  return store.chat?.id ?? activeChatId ?? route.param ?? null;
+}
+
+function messageListChatId(el: HTMLElement, route: Route): string | null {
+  return el.dataset.chatId ?? renderedChatSessionId(route);
+}
+
+function snapshotChatScroll(sessionId: string, el: HTMLElement): ChatScrollSnapshot {
+  const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+  return {
+    sessionId,
+    scrollTop: el.scrollTop,
+    nearBottom: distanceFromBottom <= CHAT_STICKY_BOTTOM_PX,
+  };
+}
+
+function rememberChatScroll(snap: ChatScrollSnapshot): void {
+  chatScrollBySession.set(snap.sessionId, snap);
+}
+
+function captureChatScroll(route: Route): ChatScrollSnapshot | null {
+  const el = root.querySelector<HTMLElement>(".chat-messages");
+  const sessionId = el ? messageListChatId(el, route) : null;
+  if (!sessionId || !el) return null;
+  const snap = snapshotChatScroll(sessionId, el);
+  rememberChatScroll(snap);
+  return snap;
+}
+
+function applyChatScroll(sessionId: string, mode: "bottom" | "position", scrollTop = 0): void {
+  const route = currentRoute();
+  if (route.view !== "chat") return;
+  const el = root.querySelector<HTMLElement>(".chat-messages");
+  if (!el) return;
+  if (messageListChatId(el, route) !== sessionId) return;
+  const maxScrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
+  el.scrollTop = mode === "bottom" ? el.scrollHeight : Math.min(scrollTop, maxScrollTop);
+  rememberChatScroll(snapshotChatScroll(sessionId, el));
+}
+
+function restoreChatPosition(sessionId: string, snap: ChatScrollSnapshot): void {
+  if (snap.nearBottom) applyChatScroll(sessionId, "bottom");
+  else applyChatScroll(sessionId, "position", snap.scrollTop);
+
+  // Full DOM swaps happen before the browser has always finished settling grid /
+  // flex scroll metrics. A one-frame confirmation keeps the restored position
+  // from being lost when the chat thread is rebuilt during polling or streaming.
+  window.requestAnimationFrame(() => {
+    if (snap.nearBottom) applyChatScroll(sessionId, "bottom");
+    else applyChatScroll(sessionId, "position", snap.scrollTop);
+  });
+}
+
+function restoreChatScroll(snap: ChatScrollSnapshot | null, route: Route): void {
+  const el = root.querySelector<HTMLElement>(".chat-messages");
+  const sessionId = el ? messageListChatId(el, route) : renderedChatSessionId(route);
+  if (!sessionId || !el) {
+    if (route.view !== "chat") chatScrollToBottomOnNextRender = false;
+    return;
+  }
+  if (chatScrollToBottomOnNextRender) {
+    chatScrollToBottomOnNextRender = false;
+    const next = snapshotChatScroll(sessionId, el);
+    rememberChatScroll({ ...next, nearBottom: true });
+    restoreChatPosition(sessionId, { ...next, nearBottom: true });
+    return;
+  }
+  const saved = snap?.sessionId === sessionId ? snap : chatScrollBySession.get(sessionId);
+  if (!saved) return;
+  restoreChatPosition(sessionId, saved);
+}
+
+const FOCUSABLE_IDS = new Set(["chat-input"]);
 type FocusSnapshot = { id: string; start: number | null; end: number | null } | null;
 
 function captureFocus(): FocusSnapshot {
@@ -137,6 +247,31 @@ async function enterRoute(): Promise<void> {
   if (route.view === "activity") {
     await store.loadActivity();
     poll = window.setInterval(() => store.loadActivity(), 1500);
+  } else if (route.view === "chat") {
+    if (store.chatSessions === null) await store.loadChatSessions();
+    const ids = new Set((store.chatSessions ?? []).map((s) => s.id));
+    const first = store.chatSessions?.[0]?.id ?? null;
+    const remembered = activeChatId && ids.has(activeChatId) ? activeChatId : null;
+    const want = route.param ?? remembered ?? first;
+    activeChatId = want;
+    if (want) {
+      await store.loadChatSession(want);
+      if (store.chatMissingId === want) {
+        render();
+        return;
+      }
+      poll = window.setInterval(async () => {
+        const r = currentRoute();
+        const current = r.param ?? activeChatId;
+        if (r.view !== "chat" || current !== want) return;
+        await store.loadChatSession(want);
+      }, 1500);
+    } else {
+      store.chat = null;
+      store.chatMissingId = null;
+      store.chatError = "";
+      render();
+    }
   } else if (route.view === "workspace") {
     if (store.workflows === null) await store.loadWorkflows();
     // Default-select the first workflow (or the routed one). Keys are provider:name.
@@ -147,19 +282,15 @@ async function enterRoute(): Promise<void> {
     else render();
   } else if (route.view === "jobs") {
     render();
-  } else if (route.view === "launch") {
+  } else if (route.view === "settings") {
+    if (store.settings === null) await store.loadSettings();
     render();
-    if (store.adapters === null) await store.loadAdapters();
   } else if (route.view === "job" && route.param) {
     if (store.run?.runId !== route.param) {
       store.clearRun();
       selectedAi = null;
-      saveForm.savedPath = "";
-      saveForm.error = "";
-      saveForm.name = "";
       render();
     }
-    if (store.adapters === null) void store.loadAdapters();
     await store.loadRun(route.param);
     if (jobTab === "result") await store.loadResult(route.param);
     poll = window.setInterval(async () => {
@@ -201,7 +332,53 @@ function go(hash: string): void {
   location.hash = hash;
 }
 
+function goOrReload(hash: string): void {
+  if (location.hash === hash) void enterRoute();
+  else go(hash);
+}
+
+function chatRoute(id: string | null): string {
+  return id ? `#/chat/${encodeURIComponent(id)}` : "#/chat";
+}
+
+async function sendChat(): Promise<void> {
+  const text = chatDraft.trim();
+  const id = activeChatId;
+  if (!id || store.chatMissingId) {
+    store.chatError = "Create a session first.";
+    store.emit();
+    return;
+  }
+  if (!text) {
+    chatDraft = "";
+    store.chatError = "Message text is required.";
+    store.emit();
+    return;
+  }
+  if (store.chatSending) return;
+  const updated = await store.sendChatMessage(id, text);
+  if (updated) {
+    activeChatId = updated.id;
+    chatDraft = "";
+    chatScrollToBottomOnNextRender = true;
+    render();
+  }
+}
+
 // --- click delegation (read-only affordances only) ---
+root.addEventListener(
+  "scroll",
+  (ev) => {
+    const target = ev.target;
+    if (!(target instanceof HTMLElement) || !target.classList.contains("chat-messages")) return;
+    const route = currentRoute();
+    const sessionId = messageListChatId(target, route);
+    if (!sessionId) return;
+    rememberChatScroll(snapshotChatScroll(sessionId, target));
+  },
+  true,
+);
+
 root.addEventListener("click", (ev) => {
   const t = ev.target as HTMLElement;
   const nav = t.closest<HTMLElement>("[data-nav]");
@@ -217,6 +394,43 @@ root.addEventListener("click", (ev) => {
   const wfEl = t.closest<HTMLElement>("[data-wf]");
   if (wfEl) {
     void selectWorkflow(wfEl.dataset.wf!);
+    return;
+  }
+  const chatSession = t.closest<HTMLElement>("[data-chat-session]");
+  if (chatSession) {
+    const id = chatSession.dataset.chatSession!;
+    activeChatId = id;
+    chatDraft = "";
+    store.chatError = "";
+    goOrReload(chatRoute(id));
+    return;
+  }
+  if (t.closest("[data-chat-new]") && !store.chatCreating) {
+    void (async () => {
+      const created = await store.createChatSession();
+      if (!created) return;
+      activeChatId = created.id;
+      chatDraft = "";
+      goOrReload(chatRoute(created.id));
+    })();
+    return;
+  }
+  const deleteChat = t.closest<HTMLElement>("[data-chat-delete]");
+  if (deleteChat && !store.chatCreating && !store.chatSending) {
+    const id = deleteChat.dataset.chatDelete!;
+    if (!window.confirm(tr("Delete this chat session?"))) return;
+    void (async () => {
+      const ok = await store.deleteChatSession(id);
+      if (!ok) return;
+      const next = store.chatSessions?.[0]?.id ?? null;
+      activeChatId = next;
+      chatDraft = "";
+      goOrReload(chatRoute(next));
+    })();
+    return;
+  }
+  if (t.closest("[data-chat-send]")) {
+    void sendChat();
     return;
   }
   const tabEl = t.closest<HTMLElement>("[data-tab]");
@@ -253,93 +467,12 @@ root.addEventListener("click", (ev) => {
     render();
     return;
   }
-  if (t.closest("[data-generate]") && !launchForm.busy) {
-    void (async () => {
-      launchForm.busy = true;
-      launchForm.error = "";
-      render();
-      try {
-        // effectiveAdapter() is the single source of truth for the picked agent
-        // (the same value the <select> preselects), so a never-touched default
-        // still posts — and it can never be an uninstalled adapter.
-        const adapter = effectiveAdapter();
-        const source = launchForm.source.trim();
-        const body: { task: string; adapter?: string; source?: string } = { task: launchForm.task.trim() };
-        if (adapter) body.adapter = adapter;
-        if (source) body.source = source;
-        const { runId } = await api.generate(body);
-        rememberDir(body.source ?? "");
-        launchForm.busy = false;
-        go(`#/job/${encodeURIComponent(runId)}`);
-      } catch (err) {
-        launchForm.busy = false;
-        launchForm.error = (err as Error).message;
-        render();
-      }
-    })();
-    return;
-  }
   const stopEl = t.closest<HTMLElement>("[data-stop]");
   if (stopEl) {
     void api
       .control(stopEl.dataset.stop!, "stop")
       .then(() => store.loadRun(stopEl.dataset.stop!))
       .catch(() => {});
-    return;
-  }
-  if (t.closest("[data-run-generated]")) {
-    const run = store.run;
-    const gen = store.result as { script?: unknown } | undefined;
-    if (!run || !gen || typeof gen.script !== "string") return;
-    void (async () => {
-      try {
-        const body: { script: string; adapter?: string; source?: string } = { script: gen.script as string };
-        if (run.adapter) body.adapter = run.adapter;
-        if (run.source) body.source = run.source;
-        const { runId } = await api.launchRun(body);
-        go(`#/job/${encodeURIComponent(runId)}`);
-      } catch (err) {
-        alert((err as Error).message);
-      }
-    })();
-    return;
-  }
-  if (t.closest("[data-regenerate]")) {
-    const run = store.run;
-    const args = (run?.args ?? {}) as { task?: unknown };
-    prefillLaunch({
-      task: typeof args.task === "string" ? args.task : "",
-      adapter: run?.adapter ?? "",
-      source: run?.source ?? "",
-    });
-    go("#/launch");
-    return;
-  }
-  if (t.closest("[data-save]") && !saveForm.busy) {
-    const run = store.run;
-    if (!run) return;
-    const nameInput = document.getElementById("save-name") as HTMLInputElement | null;
-    const name = (nameInput?.value ?? saveForm.name ?? "").trim();
-    void (async () => {
-      saveForm.busy = true;
-      saveForm.error = "";
-      render();
-      try {
-        const { path } = await api.saveWorkflow({
-          name,
-          fromRun: run.runId,
-          scope: saveForm.scope,
-          ...(saveForm.scope === "project" && run.source ? { projectDir: run.source } : {}),
-        });
-        saveForm.savedPath = path;
-        // The Workspace list has a new entry now; refresh its cache.
-        void store.loadWorkflows();
-      } catch (err) {
-        saveForm.error = (err as Error).message;
-      }
-      saveForm.busy = false;
-      render();
-    })();
     return;
   }
   const copyEl = t.closest<HTMLElement>("[data-copy]");
@@ -355,13 +488,40 @@ root.addEventListener("click", (ev) => {
 // app), so inputs write through to module state as the user types.
 root.addEventListener("input", (ev) => {
   const el = ev.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
-  if (el.id === "lf-task") launchForm.task = el.value;
-  else if (el.id === "lf-adapter") {
-    launchForm.adapter = el.value;
-    render(); // the permission line tracks the selected adapter
-  } else if (el.id === "lf-source") launchForm.source = el.value;
-  else if (el.id === "save-name") saveForm.name = el.value;
-  else if (el.id === "save-scope") saveForm.scope = el.value === "project" ? "project" : "global";
+  if (el.id === "chat-input") {
+    chatDraft = el.value;
+    if (store.chatError === "Message text is required." && el.value.trim()) {
+      store.chatError = "";
+      root.querySelector(".chat-error")?.remove();
+    }
+    refreshChatComposer();
+  }
+});
+
+root.addEventListener("compositionstart", (ev) => {
+  const el = ev.target as HTMLElement | null;
+  if (el?.id === "chat-input") composingChatInput = true;
+});
+
+root.addEventListener("compositionend", (ev) => {
+  const el = ev.target as HTMLTextAreaElement | null;
+  if (el?.id !== "chat-input") return;
+  composingChatInput = false;
+  chatDraft = el.value;
+  if (deferredRender) {
+    deferredRender = false;
+    render();
+  } else {
+    refreshChatComposer();
+  }
+});
+
+root.addEventListener("keydown", (ev) => {
+  const el = ev.target as HTMLTextAreaElement | null;
+  if (el?.id === "chat-input" && ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
+    ev.preventDefault();
+    void sendChat();
+  }
 });
 
 document.addEventListener("keydown", (e) => {
@@ -382,9 +542,6 @@ store.subscribe(render);
 // stream, so a headless capture's virtual clock can settle (an open stream keeps
 // the network "busy" forever). Harmless in normal use — no one passes it.
 const snap = new URLSearchParams(location.search).get("snap") === "1";
-// In the Tauri shell the OS draws real traffic lights (Overlay titlebar), so drop
-// our decorative ones and inset the toolbar to clear them (see .is-native in CSS).
-document.body.classList.toggle("is-native", isNative());
 applyDocLang();
 if (!location.hash) location.hash = "#/activity";
 if (!snap) store.connect();

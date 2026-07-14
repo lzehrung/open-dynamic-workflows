@@ -1,11 +1,10 @@
 // Two rival CLIs hand code to each other through a shared on-disk directory.
-// This ONLY works in inplace mode against a throwaway --source dir.
+// This needs inplace mode (the default) against a throwaway --source dir.
 //
 // odw.config.json (keys are FLAT/top-level — nesting under "settings" is
-// silently ignored and you fall back to copy mode, where edits evaporate):
+// silently ignored and you fall back to the built-in defaults):
 //   {
 //     "defaultAdapter": "claude",
-//     "workspaceMode": "inplace",
 //     "adapters": {
 //       "claude": {
 //         "command": ["claude", "--print", "--dangerously-skip-permissions", "--no-session-persistence"],
@@ -29,7 +28,7 @@ export const meta = {
   description:
     'Two rival CLIs in a turn-based loop: Claude Code implements, Codex reviews, repeat until Codex signs off.',
   whenToUse:
-    'A coding task you want built by one agent and adversarially checked by another. REQUIRES workspaceMode "inplace" and a throwaway --source dir: the two agents hand code to each other through that shared directory on disk (Claude writes the file, Codex reads/runs the same file). Pass a bare task string, or {task, file?, maxRounds?}.',
+    'A coding task you want built by one agent and adversarially checked by another. Run it with a throwaway --source dir: the two agents hand code to each other through that shared directory on disk (Claude writes the file, Codex reads/runs the same file — the default in-place workspace is exactly what makes this work). Pass a bare task string, or {task, file?, maxRounds?}.',
   phases: [{ title: 'Implement' }, { title: 'Review' }],
 }
 

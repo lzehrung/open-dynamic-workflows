@@ -16,9 +16,11 @@ shell 出去执行一个本地命令，通过 stdin 或一个参数把拼好的 
 命令模板刻意保守，而且内置适配器之间**权限并不相同**：
 
 - `codex` 以 `--sandbox workspace-write` 运行：开箱即可在其工作区内**编辑文件并执行
-  命令**。
-- `claude` 以 `--permission-mode acceptEdits` 运行：**能编辑文件但不能执行命令**
-  （要求它运行什么的 prompt 会卡住或被拒绝）。要让 Claude 也能跑命令，用
+  命令**。它还带着 `--search`，可以**原生搜索网页**。
+- `claude` 以 `--permission-mode acceptEdits` 加 `--allowedTools WebSearch WebFetch`
+  运行：**能编辑文件、能用网页工具，但不能执行命令**（要求它运行什么的 prompt 会卡住
+  或被拒绝）。网页白名单很关键：headless 的 acceptEdits 否则会静默拒绝
+  WebSearch/WebFetch，`examples/deep-research.js` 这类调研 workflow 会直接跑不通。要让 Claude 也能跑命令，用
   `--dangerously-skip-permissions` 覆盖该适配器——它**没有任何沙箱**，所以只能对着一个
   用完即弃的 `--source` 目录这么干，绝不要指向你的真实仓库：
 
@@ -52,7 +54,6 @@ shell 出去执行一个本地命令，通过 stdin 或一个参数把拼好的 
   "defaultAdapter": "claude",
   "concurrency": 8,
   "maxAgents": 1000,
-  "workspaceMode": "copy",
   "timeout": 1800,
   "schemaRetries": 2,
   "runsRoot": "~/.odw/runs",
@@ -79,7 +80,6 @@ shell 出去执行一个本地命令，通过 stdin 或一个参数把拼好的 
 | `defaultAdapter` | 一次调用没指名适配器时用的适配器。未设置时：用唯一配置的那个，或——全新安装下——用 PATH 上唯一真实存在的那个 CLI |
 | `concurrency` | 同时运行的 agent CLI 上限；省略则自动（`min(16, cpus-2)`） |
 | `maxAgents` | 单次运行总派发量的硬上限（防失控兜底） |
-| `workspaceMode` | `"copy"`（隔离工作树 + diff；安全的默认值）或 `"inplace"`（agent 直接在真实目录里工作——没有隔离、没有 diff；只在想要就地修改时使用） |
 | `timeout` | 每个 agent CLI 的超时（秒） |
 | `schemaRetries` | schema 校验失败时的额外重试次数 |
 | `runsRoot` | run 的存放位置（默认 `~/.odw/runs`） |
