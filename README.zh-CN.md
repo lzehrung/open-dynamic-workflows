@@ -11,7 +11,7 @@ Gemini、Qwen、Kimi 编排成可调度的机群——与 Claude Code 自带 Wor
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/Node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](tsconfig.json)
-[![tests](https://img.shields.io/badge/tests-256%20passing-brightgreen.svg)](tests)
+[![tests](https://img.shields.io/badge/tests-275%20passing-brightgreen.svg)](tests)
 [![runtime deps](https://img.shields.io/badge/runtime%20deps-0-blue.svg)](package.json)
 
 [English](README.md) · [简体中文](README.zh-CN.md)
@@ -179,7 +179,10 @@ odw run examples/fan-out-reduce.js --wait --args '{"question": "Design a rate li
 ```
 
 旗舰示例 [`examples/deep-research.js`](examples/deep-research.js)(扇出式联网调研 → 对抗式
-事实核查 → 带引用报告)正是这样一个脚本。
+事实核查 → 带引用报告)正是这样一个脚本。它的实战版
+[`deep-research-verified.js`](examples/deep-research-verified.js)(在 codex 适配器上以
+100 个 agent、约 9 分钟端到端验证过)还配了可进 cron 的包装脚本——见
+[`docs/recipes/deep-research-verified.md`](docs/recipes/deep-research-verified.md)。
 
 ## 编程原语
 
@@ -281,7 +284,9 @@ odw logs --workflow adversarial-verify --follow
 
 ## 配置适配器
 
-Codex、Claude Code、Gemini、Qwen、Kimi 开箱即用。`odw init` 会列出装了哪些 CLI
+Codex、Claude Code、Gemini、Qwen、Kimi 开箱即用。内置的 `codex` 和 `claude`
+**自带联网能力**——codex 带原生 `--search`,claude 放行了 WebSearch/WebFetch——
+调研类 workflow 零调参就能跑。`odw init` 会列出装了哪些 CLI
 (带各自的权限姿态)并设置默认——在终端里是交互式选择,其他环境退化为纯报告,
 `odw init --adapter <名字>` 则不弹提示直接写入。要调参或加自己的 CLI,放一个
 `odw.config.json`(见 [`odw.config.example.json`](odw.config.example.json))到项目根、
@@ -349,12 +354,16 @@ workflow 脚本始终是**纯 `.js`**、从不编译;引擎用 **TypeScript** �
 | Workflow | 形态 |
 | --- | --- |
 | [`deep-research.js`](examples/deep-research.js) | 扇出调研 → 对抗式事实核查 → 带引用报告 |
+| [`deep-research-verified.js`](examples/deep-research-verified.js) | 实战版:定界 → 搜索 → 抓取 → 三票对抗核查 → 带引用综合,配可进 cron 的包装脚本([配方](docs/recipes/deep-research-verified.md)) |
+| [`ultra-mode.js`](examples/ultra-mode.js) | 有纪律的深度工作循环:规划 → 并行攻坚 → 对抗评审 → 综合 |
 | [`fan-out-reduce.js`](examples/fan-out-reduce.js) | 并行起草 N 份 → 综合出最佳 |
 | [`adversarial-verify.js`](examples/adversarial-verify.js) | 产出发现 → 只保留扛住证伪的 |
 | [`loop-until-dry.js`](examples/loop-until-dry.js) | 循环扇出 finder,连续 K 轮无新发现才停 |
 | [`routing.js`](examples/routing.js) | 给请求分类 → 路由到对应专家 → 给结果打分 |
 | [`generate-and-filter.js`](examples/generate-and-filter.js) | 并行产出大量点子 → 去重 → 只留过 rubric 的 |
 | [`tournament.js`](examples/tournament.js) | N 种思路各自解题 → 两两评判晋级 → 决出唯一胜者 |
+| [`codex-claude-loop.js`](examples/codex-claude-loop.js) | 两个对家 CLI 回合制对弈:Claude 实现,Codex 评审,循环直到签收 |
+| [`agent-daily-digest.js`](examples/agent-daily-digest.js) | 发现信息源 → 并行提取 → 综合 → 核查 |
 
 ## 开发
 
@@ -378,21 +387,25 @@ npm run build:binary  # 打包 + Node SEA + postject → 单个自包含的 ./bu
 
 ## 状态
 
-**最新(`main` 上,未发版):Chat Host**——看板现在带本地 Chat Host:提到 ODW 的回合会交给
-真实异步 ODW 运行,结果返回后再恢复会话;桌面(Tauri)App 已**退役**——`odw serve` 的
-网页看板是所有平台上唯一的客户端。引擎侧方言也补**完整**了:嵌套 `workflow()`
-已实现(共享调度与预算,仅一层),`budget.spent()` 从桩升级为真实(估算)计量、`--budget`
-成为硬上限,外加 `odw run --adapter <name>`、随 run 留档的内联脚本运行,以及让 workflow
-能生成 workflow 的 `validate()` 原语。
+**最新(`main` 上,未发版):**在交互式终端里,`odw run` 现在会直接挂上**前台实时视图**
+——Ctrl-C 只脱离不杀任务,`odw attach` 随时挂回,管道/CI 下仍保持先拿 run id 再轮询的
+老契约。**首跑引导**落地:装了多个 CLI 时安装器会当场让你选默认,`odw init` 随时重开
+这个选择,发射时会预警"裸 `agent()` 调用会失败",配置错误也改为当场失败——不再返回一个
+装满 null 的"成功"运行。内置 `codex`/`claude` 适配器**开箱自带联网能力**,实战版
+[`deep-research-verified.js`](examples/deep-research-verified.js) 连同可进 cron 的
+包装脚本一起入库。更早合入 `main` 的:看板的本地 **Chat Host**(提到 ODW 的回合交给真实
+异步运行)、桌面(Tauri)App **退役**、方言补**完整**——嵌套 `workflow()`(共享调度与预算,
+仅一层)、`budget.spent()` 真实(估算)计量令 `--budget` 成为硬上限、`odw run --adapter
+<name>`、随 run 留档的内联脚本运行,以及让 workflow 能生成 workflow 的 `validate()` 原语。
 
 **v0.3.0:****Jobs** 标签页也会展示 **Claude Code 自己的 workflow 运行**——已完成的
 历史与正在跑的实时任务——只读,并与 ODW 自己的 run 合并。见
 [Releases](https://github.com/xz1220/open-dynamic-workflows/releases)。
 
 **核心运行时已交付。** 完整运行时已在 `main` 上——适配层、执行桥接、工作区隔离、异步调度器、
-注入原语、loader/transform、JSON-Schema 引擎、后台运行时,以及 `odw` CLI。**256 个测试
+注入原语、loader/transform、JSON-Schema 引擎、后台运行时,以及 `odw` CLI。**275 个测试
 通过**,旗舰示例 [`examples/deep-research.js`](examples/deep-research.js) 端到端跑通
-(plan → gather → verify → synthesize → critique)。
+(plan → search → extract → vote → report)。
 
 ### 路线图(v1.5+)
 

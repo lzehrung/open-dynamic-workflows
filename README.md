@@ -11,7 +11,7 @@ Workflow tool, plus a web dashboard that chats with Codex and watches every run 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/Node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](tsconfig.json)
-[![tests](https://img.shields.io/badge/tests-256%20passing-brightgreen.svg)](tests)
+[![tests](https://img.shields.io/badge/tests-275%20passing-brightgreen.svg)](tests)
 [![runtime deps](https://img.shields.io/badge/runtime%20deps-0-blue.svg)](package.json)
 
 [English](README.md) · [简体中文](README.zh-CN.md)
@@ -192,7 +192,10 @@ odw run examples/fan-out-reduce.js --wait --args '{"question": "Design a rate li
 ```
 
 The flagship [`examples/deep-research.js`](examples/deep-research.js) (fan-out web
-research → adversarial fact-check → cited report) is exactly such a script.
+research → adversarial fact-check → cited report) is exactly such a script. Its
+battle-tested sibling [`deep-research-verified.js`](examples/deep-research-verified.js)
+(validated at 100 agents / ~9 min on the codex adapter) ships with a cron-ready
+wrapper — see [`docs/recipes/deep-research-verified.md`](docs/recipes/deep-research-verified.md).
 
 ## The primitives
 
@@ -301,7 +304,10 @@ Claude Code's own runs stay strictly read-only.
 
 ## Configure adapters
 
-Codex, Claude Code, Gemini, Qwen, and Kimi work out of the box. `odw init`
+Codex, Claude Code, Gemini, Qwen, and Kimi work out of the box. The built-in
+`codex` and `claude` come **web-capable** — native `--search` for codex,
+WebSearch/WebFetch allowlisted for claude — so research workflows run with zero
+tuning. `odw init`
 shows what's installed (with each CLI's permission posture) and sets the
 default — interactively at a terminal, as a plain report anywhere else, and
 `odw init --adapter <name>` writes the choice without prompting. To tune flags
@@ -377,6 +383,8 @@ Runnable, plain-JS workflows in [`examples/`](examples/):
 | Workflow | Pattern |
 | --- | --- |
 | [`deep-research.js`](examples/deep-research.js) | fan-out research → adversarial fact-check → cited report |
+| [`deep-research-verified.js`](examples/deep-research-verified.js) | the battle-tested variant: scope → search → fetch → 3-vote verify → cited synthesis, with a cron-ready wrapper ([recipe](docs/recipes/deep-research-verified.md)) |
+| [`ultra-mode.js`](examples/ultra-mode.js) | disciplined deep-work loop: plan → parallel attack → adversarial review → synthesize |
 | [`fan-out-reduce.js`](examples/fan-out-reduce.js) | draft N in parallel → synthesize the best |
 | [`adversarial-verify.js`](examples/adversarial-verify.js) | surface findings → keep only those that survive refutation |
 | [`loop-until-dry.js`](examples/loop-until-dry.js) | loop fanning out finders until K dry rounds |
@@ -409,16 +417,22 @@ into the host's `node`, so each target is built on its own runner.
 
 ## Status
 
-**What's new (unreleased, on `main`):** the dashboard now includes a local
-**Chat Host** that can hand ODW-mentioned turns to a real asynchronous ODW run
-and resume the session when the result returns, and the desktop (Tauri) app has
-been **retired** — the web dashboard via `odw serve` is the single client on
-every platform. Under the hood the dialect got
-**complete**: nested `workflow()` is implemented (shared scheduler/budget, one
-level deep), `budget.spent()` does real (estimated) accounting so `--budget` is
-a hard ceiling, plus `odw run --adapter <name>`, inline-source runs archived in
-their run directory, and a `validate()` primitive so workflows can generate
-workflows.
+**What's new (unreleased, on `main`):** `odw run` now attaches a **live
+foreground view** in interactive terminals — Ctrl-C detaches, `odw attach`
+re-attaches, and pipes/CI keep the fire-and-poll contract. First-run
+**onboarding** landed: the installer asks you to pick a default agent when
+several CLIs are installed, `odw init` re-opens that choice anytime, launches
+warn upfront when bare `agent()` calls would fail, and config errors are now
+fatal instead of returning a "done" run full of nulls. The built-in
+`codex`/`claude` adapters got **web access** out of the box, and the
+battle-tested [`deep-research-verified.js`](examples/deep-research-verified.js)
+ships with a cron-ready wrapper. Earlier on `main`: the dashboard's local
+**Chat Host** (hand ODW-mentioned turns to a real asynchronous run), the
+desktop (Tauri) app **retired** in favor of `odw serve`, and the dialect made
+**complete** — nested `workflow()` (shared scheduler/budget, one level deep),
+real `budget.spent()` accounting so `--budget` is a hard ceiling,
+`odw run --adapter <name>`, inline-source runs archived in their run directory,
+and a `validate()` primitive so workflows can generate workflows.
 
 **v0.3.0:** the **Jobs** tab also surfaces **Claude Code's own workflow runs** —
 finished history and live in-flight jobs — read-only, merged alongside ODW's own
@@ -428,8 +442,8 @@ runs. See
 **Core runtime is shipped.** The full runtime is on `main` — the adapter layer, execution
 bridge, workspace isolation, the async scheduler, the injected primitives, the
 loader/transform, the JSON-Schema engine, the background runtime, and the `odw`
-CLI. **256 tests pass**, and the flagship [`examples/deep-research.js`](examples/deep-research.js)
-runs end-to-end (plan → gather → verify → synthesize → critique).
+CLI. **275 tests pass**, and the flagship [`examples/deep-research.js`](examples/deep-research.js)
+runs end-to-end (plan → search → extract → vote → report).
 
 ### Roadmap (v1.5+)
 
