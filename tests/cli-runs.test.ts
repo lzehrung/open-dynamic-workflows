@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { main } from "../src/cli.js";
-import { startRun } from "../src/runtime/launcher.js";
+import { startRun, waitFor } from "../src/runtime/launcher.js";
 import { RunStore } from "../src/runtime/run-store.js";
 
 /** Run the CLI with stdout/stderr captured. */
@@ -143,6 +143,10 @@ test("R7: rerun starts a fresh run with the same script + args", async () => {
     assert.ok(store.exists(newId), "the rerun's new run is on disk");
     assert.deepEqual(store.readMeta(newId).args, { k: 7 }, "same args");
     assert.equal(store.readMeta(newId).script, store.readMeta(runId).script, "same script");
+    await Promise.all([
+      waitFor(store, runId, { timeoutMs: 5_000, pollIntervalMs: 20 }),
+      waitFor(store, newId, { timeoutMs: 5_000, pollIntervalMs: 20 }),
+    ]);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

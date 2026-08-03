@@ -15,13 +15,14 @@
  * file found above is merged on top, so a user only specifies what they change.
  */
 
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { cpus, homedir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { AdapterNotFound, ConfigError } from "../errors.js";
 import { BUILTIN_ADAPTERS, DEFAULT_SETTINGS, type RawAdapter } from "./builtin.js";
-import type { Adapter, AdapterFlags, Config, Settings } from "./types.js";
+import { isOnPath } from "./executable.js";
+import type { Adapter, AdapterFlags, AdapterOutput, Config, Settings } from "./types.js";
 
 export const CONFIG_ENV_VAR = "ODW_CONFIG";
 
@@ -64,7 +65,7 @@ const KNOWN_TOP_KEYS = [
   "claudeJobsScope",
 ] as const;
 
-const KNOWN_ADAPTER_KEYS = ["command", "stdin", "env", "timeout", "label", "flags"] as const;
+const KNOWN_ADAPTER_KEYS = ["command", "stdin", "env", "timeout", "label", "flags", "output"] as const;
 
 /**
  * Lint a parsed config object for keys odw would silently ignore.
@@ -208,7 +209,7 @@ export function writeDefaultAdapter(
     ? expandHome(explicitPath)
     : env
       ? expandHome(env)
-      : join(homedir(), ".config", "odw", "config.json");
+      : join(homeDir(), ".config", "odw", "config.json");
   let raw: Record<string, unknown> = {};
   if (existsSync(target)) {
     const text = readFileSync(target, "utf8");
@@ -297,24 +298,16 @@ function permissionNote(command: string[]): string {
     else if (am) notes.push(`approval mode: ${am}`);
     else if (arg === "--dangerously-skip-permissions") notes.push("full autonomy (permission prompts skipped)");
     else if (arg === "--yolo" || arg === "--full-auto") notes.push("full autonomy");
+    else if (arg === "--auto") {
+      notes.push(command[0] === "kilo" ? "full autonomy" : "full autonomy (explicit denies remain)");
+    } else if (arg === "--force") {
+      notes.push("full autonomy (explicit denies remain)");
+    }
   }
   return notes.length ? notes.join(" · ") : `runs: ${command[0]}`;
 }
 
-/** Whether an adapter's executable resolves on the current PATH. */
-export function isOnPath(cmd: string): boolean {
-  if (cmd.includes("/")) return existsSync(expandHome(cmd));
-  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
-    if (!dir) continue;
-    try {
-      accessSync(join(dir, cmd), constants.X_OK);
-      return true;
-    } catch {
-      /* keep looking */
-    }
-  }
-  return false;
-}
+export { executableCandidates, isOnPath } from "./executable.js";
 
 /** Concrete concurrency cap, auto-derived from CPU count when unset. */
 export function resolveConcurrency(concurrency: number | null): number {
@@ -325,12 +318,12 @@ export function resolveConcurrency(concurrency: number | null): number {
 
 /** Directory runs are stored under; defaults to `~/.odw/runs`. */
 export function resolveRunsRoot(runsRoot: string | null): string {
-  return runsRoot ? expandHome(runsRoot) : join(homedir(), ".odw", "runs");
+  return runsRoot ? expandHome(runsRoot) : join(homeDir(), ".odw", "runs");
 }
 
 /** Directory workflows are resolved by name from; defaults to `~/.odw/workflows`. */
 export function resolveWorkflowsRoot(workflowsRoot: string | null): string {
-  return workflowsRoot ? expandHome(workflowsRoot) : join(homedir(), ".odw", "workflows");
+  return workflowsRoot ? expandHome(workflowsRoot) : join(homeDir(), ".odw", "workflows");
 }
 
 /**
@@ -342,7 +335,7 @@ export function resolveWorkflowsRoot(workflowsRoot: string | null): string {
 export function resolveClaudeWorkflowsRoot(claudeWorkflowsRoot: string | null): string {
   if (claudeWorkflowsRoot) return expandHome(claudeWorkflowsRoot);
   const configDir = process.env.CLAUDE_CONFIG_DIR;
-  return join(configDir ? expandHome(configDir) : join(homedir(), ".claude"), "workflows");
+  return join(configDir ? expandHome(configDir) : join(homeDir(), ".claude"), "workflows");
 }
 
 /**
@@ -356,14 +349,18 @@ export function resolveClaudeWorkflowsRoot(claudeWorkflowsRoot: string | null): 
 export function resolveClaudeProjectsRoot(claudeProjectsRoot?: string | null): string {
   if (claudeProjectsRoot) return expandHome(claudeProjectsRoot);
   const configDir = process.env.CLAUDE_CONFIG_DIR;
-  return join(configDir ? expandHome(configDir) : join(homedir(), ".claude"), "projects");
+  return join(configDir ? expandHome(configDir) : join(homeDir(), ".claude"), "projects");
 }
 
 // --- internals ---------------------------------------------------------------
 
+function homeDir(): string {
+  return process.env.HOME?.trim() || homedir();
+}
+
 function expandHome(p: string): string {
-  if (p === "~") return homedir();
-  if (p.startsWith("~/")) return join(homedir(), p.slice(2));
+  if (p === "~") return homeDir();
+  if (p.startsWith("~/") || p.startsWith("~\\")) return join(homeDir(), p.slice(2));
   return p;
 }
 
@@ -402,7 +399,7 @@ function locate(path?: string | null, cwd?: string): string | null {
   }
   for (const candidate of [
     join(cwd ?? process.cwd(), "odw.config.json"),
-    join(homedir(), ".config", "odw", "config.json"),
+    join(homeDir(), ".config", "odw", "config.json"),
   ]) {
     if (existsSync(candidate)) return candidate;
   }
@@ -435,6 +432,7 @@ function buildAdapter(name: string, spec: RawAdapter): Adapter {
   if (spec.timeout !== undefined) adapter.timeout = Number(spec.timeout);
   if (spec.label !== undefined) adapter.label = spec.label;
   if (spec.flags !== undefined) adapter.flags = buildFlags(name, spec.flags);
+  if (spec.output !== undefined) adapter.output = buildOutput(name, spec.output);
   return adapter;
 }
 
@@ -452,6 +450,37 @@ function buildFlags(name: string, raw: unknown): AdapterFlags {
     out.model = [...(model as string[])];
   }
   return out;
+}
+
+/** Validate and normalize an adapter's stdout decoding declaration. */
+function buildOutput(name: string, raw: unknown): AdapterOutput {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new ConfigError(`adapter '${name}' 'output' must be an object`);
+  }
+  const value = raw as Record<string, unknown>;
+  if (value.format === "text") return { format: "text" };
+  if (value.format !== "jsonl") {
+    throw new ConfigError(`adapter '${name}' 'output.format' must be 'text' or 'jsonl'`);
+  }
+  if (typeof value.eventType !== "string" || !value.eventType.trim()) {
+    throw new ConfigError(`adapter '${name}' 'output.eventType' must be a non-empty string`);
+  }
+  if (
+    !Array.isArray(value.textPath) ||
+    value.textPath.length === 0 ||
+    !value.textPath.every((segment) => typeof segment === "string" && segment.length > 0)
+  ) {
+    throw new ConfigError(`adapter '${name}' 'output.textPath' must be a non-empty array of strings`);
+  }
+  if (value.select !== "last") {
+    throw new ConfigError(`adapter '${name}' 'output.select' must be 'last'`);
+  }
+  return {
+    format: "jsonl",
+    eventType: value.eventType,
+    textPath: [...(value.textPath as string[])],
+    select: "last",
+  };
 }
 
 function buildSettings(raw: Record<string, unknown>): Settings {

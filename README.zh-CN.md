@@ -4,9 +4,9 @@
 
 # Open Dynamic Workflows
 
-**Dynamic workflows for coding agents。** 一个开放运行时,把 Codex、Claude Code、
-Gemini、Qwen、Kimi 编排成可调度的机群——与 Claude Code 自带 Workflow 工具同一方言,
-外加一个能和 Codex 对话、实时观测每次运行的网页看板。
+**Dynamic workflows for coding agents。** 一个开放运行时,把 Codex、Claude Code、Gemini、
+Qwen、Kimi、Oh My Pi、Kilo Code、OpenCode、Cursor 编排成可调度的机群——与
+Claude Code 自带 Workflow 工具同一方言,外加一个实时观测每次运行的网页看板。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/Node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
@@ -22,9 +22,9 @@ Gemini、Qwen、Kimi 编排成可调度的机群——与 Claude Code 自带 Wor
 
 **Open Dynamic Workflows(ODW)** 是一个 TypeScript / Node CLI 运行时,面向可移植的
 dynamic workflow:用 JavaScript 脚本在宿主 agent 上下文之外,通过 `agent()`、
-`parallel()`、`pipeline()` 扇出并编排 coding agent。如果你在找一个 open dynamic
-workflow engine,想让 Codex、Claude Code、Gemini、Qwen、Kimi 或自定义 CLI 都能跑同一份
-workflow 脚本,这就是这个项目。
+`parallel()`、`pipeline()` 扇出并编排 coding agent。如果你想让 Codex、Claude Code、
+Gemini、Qwen、Kimi、OMP、Kilo、OpenCode、Cursor 或自定义 CLI 都跑同一份 workflow
+脚本,这就是这个项目。
 
 **dynamic workflow** 是一段小小的 JavaScript 脚本:它把编排计划放在普通代码里,在宿主
 agent 的上下文**之外**、**大规模**地调度 coding-agent CLI。你写好脚本(或拿到一个),
@@ -57,8 +57,8 @@ workflow,就成了你在任何 agent 上都能跑的资产。
 
 ## 亮点
 
-- **可移植** —— 同一份 workflow 脚本可跑在 Codex、Claude Code、Gemini、Qwen、Kimi 或你
-  自己的 CLI 上;换底层 agent 只需换适配器。
+- **可移植** —— 同一份 workflow 脚本可跑在 Codex、Claude Code、Gemini、Qwen、Kimi、
+  OMP、Kilo、OpenCode、Cursor 或你自己的 CLI 上;换底层 agent 只需换适配器。
 - **Claude Code 方言,完整支持** —— `export const meta` + 注入的 `agent` / `parallel` /
   `pipeline` / `phase` / `log` / `args` / `budget` / `workflow` 全局(含嵌套
   workflow),支持顶层 `await` 和 `return`。为 Claude Code 写的脚本在这里照跑,反之亦然。
@@ -80,7 +80,7 @@ Claude Code 已经能跑 dynamic workflow——但只能在它自己的私有运
 自己跑。ODW 把**同一份脚本**做成可移植、可独立运行的:
 
 - **任意 agent,同一份脚本** —— workflow 不止能跑 Claude Code,还能跑 Codex、Gemini、
-  Qwen、Kimi 或你自己的 CLI;换底层 agent 只需换适配器。
+  Qwen、Kimi、OMP、Kilo、OpenCode、Cursor 或你自己的 CLI;换适配器即可。
 - **带外运行** —— 每次运行都是 detached 后台 worker + run 目录,所以你能对它
   `status` / `logs --follow` / `pause` / `stop`,并从浏览器观测——不依赖任何
   宿主 agent 会话。
@@ -284,9 +284,23 @@ odw logs --workflow adversarial-verify --follow
 
 ## 配置适配器
 
-Codex、Claude Code、Gemini、Qwen、Kimi 开箱即用。内置的 `codex` 和 `claude`
-**自带联网能力**——codex 带原生 `--search`,claude 放行了 WebSearch/WebFetch——
-调研类 workflow 零调参就能跑。`odw init` 会列出装了哪些 CLI
+Codex、Claude Code、Gemini、Qwen、Kimi、Oh My Pi、Kilo Code、OpenCode、Cursor
+均开箱即用:
+
+| 适配器 | 本地 CLI | 非交互契约 |
+| --- | --- | --- |
+| `codex` | `codex` | stdout 文本;自带联网搜索 |
+| `claude` | `claude` | stdout 文本;放行 WebSearch/WebFetch |
+| `gemini` | `gemini` | stdout 文本 |
+| `qwen` | `qwen` | stdout 文本 |
+| `kimi` | `kimi` | stdout 文本 |
+| `omp` | `omp` | `--print --no-tools --no-session`;stdin 传提示词 |
+| `kilo` | `kilo` | `run --format json --auto`;从 JSONL 解出最终文本 |
+| `opencode` | `opencode` | `run --format json --auto`;从 JSONL 解出最终文本 |
+| `cursor` | `agent` | `--print --force --trust`;stdin 传提示词 |
+
+内置的 `codex` 和 `claude` **自带联网能力**,调研类 workflow 零调参就能跑。
+`odw init` 会列出装了哪些 CLI
 (带各自的权限姿态)并设置默认——在终端里是交互式选择,其他环境退化为纯报告,
 `odw init --adapter <名字>` 则不弹提示直接写入。要调参或加自己的 CLI,放一个
 `odw.config.json`(见 [`odw.config.example.json`](odw.config.example.json))到项目根、
@@ -305,6 +319,22 @@ Codex、Claude Code、Gemini、Qwen、Kimi 开箱即用。内置的 `codex` 和 
   }
 }
 ```
+
+自定义适配器默认把 stdout 作为文本并去掉首尾空白。JSONL 事件流需要显式声明事件
+类型和最终文本路径:
+
+```jsonc
+"output": {
+  "format": "jsonl",
+  "eventType": "text",
+  "textPath": ["part", "text"],
+  "select": "last"
+}
+```
+
+ODW 在运行诊断中保留原始 stdout/stderr,但只把解码后的最终响应交给 workflow。
+Windows 下的可执行文件探测遵循 `PATHEXT`,所以 `agent.cmd`、`kilo.cmd`、`omp.exe`
+这类普通 shim 无需写完整路径也能识别。
 
 配置键全部放在**顶层**——没有 `"settings"` 包装层;odw 会对未知或放错位置的键
 在 stderr 上给出警告(附 did-you-mean 提示),而不是静默忽略。没设

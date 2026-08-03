@@ -18,6 +18,17 @@ export interface AdapterFlags {
   model?: string[];
 }
 
+/** How stdout from an adapter becomes the agent's final response. */
+export type AdapterOutput =
+  | { format: "text" }
+  | {
+      /** Newline-delimited JSON events; the last matching text event wins. */
+      format: "jsonl";
+      eventType: string;
+      textPath: string[];
+      select: "last";
+    };
+
 /** How to invoke one coding-agent CLI. */
 export interface Adapter {
   name: string;
@@ -33,6 +44,8 @@ export interface Adapter {
   label?: string;
   /** Capability declaration: which per-call options this CLI carries natively. */
   flags?: AdapterFlags;
+  /** Response decoding; omitted means trimmed plain text. */
+  output?: AdapterOutput;
 }
 
 /** Run-wide knobs independent of any single adapter. */

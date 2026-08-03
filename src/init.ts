@@ -170,10 +170,10 @@ function interactive(
   env: Record<string, string | undefined>,
 ): boolean {
   if (flags.check) return false;
-  // Windows consoles don't set TERM; a readline prompt needs no cursor control,
-  // so only a POSIX terminal must prove itself sane.
+  // Windows consoles commonly omit TERM, but an explicit dumb terminal still
+  // means automation and must never prompt.
   const termOk =
-    process.platform === "win32" || (env.TERM !== undefined && env.TERM !== "dumb");
+    env.TERM === undefined ? process.platform === "win32" : env.TERM !== "dumb";
   return (
     input.isTTY === true &&
     err.isTTY === true &&

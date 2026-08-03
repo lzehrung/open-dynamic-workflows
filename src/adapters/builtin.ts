@@ -10,7 +10,7 @@
  * explains how to tune them rather than baking opinions in here.
  */
 
-import type { AdapterFlags, Settings } from "./types.js";
+import type { AdapterFlags, AdapterOutput, Settings } from "./types.js";
 
 /** A built-in adapter spec — same shape as a config entry, minus its name. */
 export interface RawAdapter {
@@ -20,6 +20,7 @@ export interface RawAdapter {
   timeout?: number;
   label?: string;
   flags?: AdapterFlags;
+  output?: AdapterOutput;
 }
 
 // `flags` only DECLARES which native flag carries a model — the router appends
@@ -27,6 +28,13 @@ export interface RawAdapter {
 // untouched. Templates stay conservative: no `{model}` baked in, no value forced.
 // Model ids do not cross CLIs (e.g. `claude-opus-4-8` is invalid to codex), so a
 // model is honoured per-CLI, not normalised across them.
+
+const KILO_OPENCODE_OUTPUT: AdapterOutput = {
+  format: "jsonl",
+  eventType: "text",
+  textPath: ["part", "text"],
+  select: "last",
+};
 export const BUILTIN_ADAPTERS: Record<string, RawAdapter> = {
   codex: {
     label: "Codex CLI",
@@ -85,6 +93,50 @@ export const BUILTIN_ADAPTERS: Record<string, RawAdapter> = {
       "text",
       "--output-format",
       "text",
+    ],
+    stdin: "{prompt}",
+    flags: { model: ["--model"] },
+  },
+  omp: {
+    label: "Oh My Pi",
+    command: [
+      "omp",
+      "--print",
+      "--no-tools",
+      "--no-session",
+      "--approval-mode",
+      "yolo",
+      "--cwd",
+      "{workspace}",
+    ],
+    stdin: "{prompt}",
+    flags: { model: ["--model"] },
+  },
+  kilo: {
+    label: "Kilo Code",
+    command: ["kilo", "run", "--format", "json", "--auto", "--dir", "{workspace}"],
+    stdin: "{prompt}",
+    flags: { model: ["--model"] },
+    output: KILO_OPENCODE_OUTPUT,
+  },
+  opencode: {
+    label: "OpenCode",
+    command: ["opencode", "run", "--format", "json", "--auto", "--dir", "{workspace}"],
+    stdin: "{prompt}",
+    flags: { model: ["--model"] },
+    output: KILO_OPENCODE_OUTPUT,
+  },
+  cursor: {
+    label: "Cursor Agent CLI",
+    command: [
+      "agent",
+      "--print",
+      "--force",
+      "--trust",
+      "--output-format",
+      "text",
+      "--workspace",
+      "{workspace}",
     ],
     stdin: "{prompt}",
     flags: { model: ["--model"] },

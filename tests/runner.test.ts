@@ -1,5 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { execPath } from "node:process";
 
 import { runCommand } from "../src/adapters/runner.js";
@@ -28,6 +31,30 @@ test("a missing executable becomes returncode 127", async () => {
   assert.equal(r.returncode, 127);
   assert.match(r.stderr, /failed to launch/);
 });
+
+test(
+  "Windows PATH command shims run through their PowerShell companion without shell interpolation",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "odw-runner-shim-"));
+    try {
+      const name = "odw-runner-shim";
+      writeFileSync(join(dir, `${name}.cmd`), "@echo off\r\nexit /b 99\r\n");
+      writeFileSync(
+        join(dir, `${name}.ps1`),
+        'param([string]$Value)\n$body = [Console]::In.ReadToEnd()\n[Console]::Out.Write(\"$Value|$body\")\n',
+      );
+      const result = await runCommand([name, "safe&literal"], {
+        stdin: "stdin-value",
+        env: { ...process.env, PATH: dir, PATHEXT: ".CMD" } as Record<string, string>,
+      });
+      assert.equal(result.returncode, 0);
+      assert.equal(result.stdout, "safe&literal|stdin-value");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
 
 test("a timeout kills the process and flags timedOut", async () => {
   const r = await runCommand([execPath, "-e", "setTimeout(() => {}, 10000)"], { timeout: 0.2 });
