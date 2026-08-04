@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execPath } from "node:process";
@@ -50,6 +50,25 @@ test(
       });
       assert.equal(result.returncode, 0);
       assert.equal(result.stdout, "safe&literal|stdin-value");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "Windows PATH executables use their resolved PATHEXT path",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "odw-runner-exe-"));
+    try {
+      const name = "odw-runner-exe";
+      copyFileSync(execPath, join(dir, `${name}.exe`));
+      const result = await runCommand([name, "--version"], {
+        env: { ...process.env, PATH: dir, PATHEXT: ".EXE" } as Record<string, string>,
+      });
+      assert.equal(result.returncode, 0);
+      assert.match(result.stdout, /^v\d+/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

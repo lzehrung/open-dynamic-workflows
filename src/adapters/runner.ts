@@ -78,6 +78,8 @@ export const runCommand: CommandRunner = (command, options = {}) => {
           script,
           ...args,
         ];
+      } else if (resolved) {
+        executable = resolved;
       }
     }
 
