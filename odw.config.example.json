@@ -1,5 +1,5 @@
 {
-  "$comment": "Copy to ./odw.config.json, ~/.config/odw/config.json, or pass --config. All keys are TOP-LEVEL (no 'settings' wrapper; odw warns about unknown or misplaced keys). odw never calls model APIs directly: each adapter is a local CLI it shells out to. The five below ship as built-ins, so you only need this file to change defaults, tune flags, or add your own adapter.",
+  "$comment": "Copy to ./odw.config.json, ~/.config/odw/config.json, or pass --config. All keys are TOP-LEVEL (no 'settings' wrapper; odw warns about unknown or misplaced keys). odw never calls model APIs directly: each adapter is a local CLI it shells out to. The nine below ship as built-ins, so you only need this file to change defaults, tune flags, or add your own adapter.",
 
   "defaultAdapter": "claude",
   "concurrency": 8,
@@ -34,6 +34,32 @@
       "label": "Kimi CLI",
       "command": ["kimi", "--work-dir", "{workspace}", "--print", "--input-format", "text", "--output-format", "text"],
       "stdin": "{prompt}"
+    },
+    "omp": {
+      "label": "Oh My Pi",
+      "command": ["omp", "--print", "--no-tools", "--no-session", "--approval-mode", "yolo", "--cwd", "{workspace}"],
+      "stdin": "{prompt}",
+      "flags": { "model": ["--model"] }
+    },
+    "kilo": {
+      "label": "Kilo Code CLI",
+      "command": ["kilo", "run", "--format", "json", "--auto", "--dir", "{workspace}"],
+      "stdin": "{prompt}",
+      "flags": { "model": ["--model"] },
+      "output": { "format": "jsonl", "eventType": "text", "textPath": ["part", "text"], "select": "last" }
+    },
+    "opencode": {
+      "label": "OpenCode",
+      "command": ["opencode", "run", "--format", "json", "--auto", "--dir", "{workspace}"],
+      "stdin": "{prompt}",
+      "flags": { "model": ["--model"] },
+      "output": { "format": "jsonl", "eventType": "text", "textPath": ["part", "text"], "select": "last" }
+    },
+    "cursor": {
+      "label": "Cursor Agent CLI",
+      "command": ["agent", "--print", "--force", "--trust", "--output-format", "text", "--workspace", "{workspace}"],
+      "stdin": "{prompt}",
+      "flags": { "model": ["--model"] }
     },
     "my_wrapper": {
       "label": "My custom wrapper (example)",

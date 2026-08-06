@@ -137,6 +137,7 @@ function spawnWorker(store: RunStore, runId: string, source: string): void {
   const child = spawn(execPath, workerArgv, {
     cwd: source,
     detached: true, // the run outlives this process
+    windowsHide: true,
     stdio: ["ignore", logFd, logFd],
   });
   closeSync(logFd); // the child holds its own dup'd descriptors; don't leak ours

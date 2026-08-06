@@ -603,7 +603,11 @@ function openBrowser(url: string): void {
         ? ["cmd", ["/c", "start", "", url]]
         : ["xdg-open", [url]];
   try {
-    spawn(cmd as string, args as string[], { stdio: "ignore", detached: true }).unref();
+    spawn(cmd as string, args as string[], {
+      stdio: "ignore",
+      detached: true,
+      windowsHide: true,
+    }).unref();
   } catch {
     /* no browser opener available — the URL is already printed */
   }

@@ -18,6 +18,7 @@ import { join } from "node:path";
 
 import { resolveAdapter } from "./adapters/config.js";
 import { expand, expandAll, type PlaceholderContext } from "./adapters/placeholders.js";
+import { decodeAdapterOutput } from "./adapters/output.js";
 import { runCommand, type CommandRunner } from "./adapters/runner.js";
 import {
   adapterDisplayName,
@@ -114,7 +115,7 @@ export class Bridge {
       const { cli, diff } = await this.invoke(adapter, plan, prompt, timeout);
       if (!cliOk(cli)) throw new AdapterExecutionError(cliFailureMessage(adapter, cli));
 
-      const text = cli.stdout.trim();
+      const text = decodeAdapterOutput(adapter, cli.stdout);
       if (!request.schema) {
         return { value: text, text, adapter: adapter.name, attempts: attempt, diff, cli, notes: plan.notes };
       }

@@ -39,14 +39,20 @@ test("the validate() primitive is still injected when the body does not declare 
   assert.equal(await w.run(prims, null), true);
 });
 
-// #6 — permissionNote handles --flag=value forms.
-test("listAdapters surfaces --flag=value permission postures", () => {
+// #6 — permissionNote handles value forms and autonomous harness flags.
+test("listAdapters surfaces permission postures", () => {
   const cfg = loadConfig(null);
   cfg.adapters["danger"] = { name: "danger", command: ["codex", "exec", "--sandbox=danger-full-access"] };
   cfg.adapters["bypass"] = { name: "bypass", command: ["claude", "-p", "--permission-mode=bypassPermissions"] };
+  cfg.adapters["auto"] = { name: "auto", command: ["opencode", "run", "--auto"] };
+  cfg.adapters["force"] = { name: "force", command: ["agent", "--print", "--force"] };
+  cfg.adapters["kilo-auto"] = { name: "kilo-auto", command: ["kilo", "run", "--auto"] };
   const rows = listAdapters(cfg);
   assert.match(rows.find((r) => r.name === "danger")!.permissionNote, /sandbox: danger-full-access/);
   assert.match(rows.find((r) => r.name === "bypass")!.permissionNote, /permission mode: bypassPermissions/);
+  assert.match(rows.find((r) => r.name === "auto")!.permissionNote, /full autonomy.*explicit denies/);
+  assert.match(rows.find((r) => r.name === "force")!.permissionNote, /full autonomy.*explicit denies/);
+  assert.equal(rows.find((r) => r.name === "kilo-auto")!.permissionNote, "full autonomy");
 });
 
 // #10 / #24 — inline runs are flagged, and rerun re-archives them (no divergence note).

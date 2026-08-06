@@ -49,7 +49,10 @@ const GIT_MAX_BUFFER = 4 * 1024 * 1024;
 const DIFF_CAP_BYTES = 32 * 1024 * 1024;
 
 async function git(dir: string, args: string[]): Promise<string> {
-  const { stdout } = await run("git", ["-C", dir, ...args], { maxBuffer: GIT_MAX_BUFFER });
+  const { stdout } = await run("git", ["-C", dir, ...args], {
+    maxBuffer: GIT_MAX_BUFFER,
+    windowsHide: true,
+  });
   return stdout;
 }
 

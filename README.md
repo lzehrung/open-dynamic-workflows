@@ -5,8 +5,8 @@
 # Open Dynamic Workflows
 
 **Dynamic workflows for coding agents.** An open runtime that turns Codex, Claude Code,
-Gemini, Qwen and Kimi into orchestrated fleets — same scripts as Claude Code's own
-Workflow tool, plus a web dashboard that chats with Codex and watches every run live.
+Gemini, Qwen, Kimi, Oh My Pi, Kilo Code, OpenCode, and Cursor into orchestrated
+fleets — same scripts as Claude Code's own Workflow tool, plus a live web dashboard.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/Node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
@@ -24,7 +24,7 @@ Workflow tool, plus a web dashboard that chats with Codex and watches every run 
 portable dynamic workflows: JavaScript scripts that fan out coding agents with
 `agent()`, `parallel()`, and `pipeline()` outside the host agent's context. If
 you are looking for an open dynamic workflow engine for Codex, Claude Code,
-Gemini, Qwen, Kimi, or a custom CLI, this is the project.
+Gemini, Qwen, Kimi, OMP, Kilo, OpenCode, Cursor, or a custom CLI, this is the project.
 
 A **dynamic workflow** is a small JavaScript script that holds an orchestration
 plan in ordinary code and dispatches coding-agent CLIs *at scale* — outside the
@@ -60,7 +60,7 @@ mode you have probably met; each mechanism is a runnable pattern in this repo:
 ## Highlights
 
 - **Portable** — run the *same* workflow script on Codex, Claude Code, Gemini,
-  Qwen, Kimi, or your own CLI. Switch the underlying agent by switching adapters.
+  Qwen, Kimi, OMP, Kilo, OpenCode, Cursor, or your own CLI. Switch adapters.
 - **Claude Code's dialect, complete** — `export const meta` + injected
   `agent` / `parallel` / `pipeline` / `phase` / `log` / `args` / `budget` /
   `workflow` globals (nested workflows included), with top-level `await` and
@@ -84,9 +84,9 @@ Claude Code can already run dynamic workflows — but only inside its own privat
 runtime, for Claude Code itself. ODW makes the **same scripts** portable and
 standalone:
 
-- **Any agent, same script** — run a workflow on Codex, Gemini, Qwen, Kimi, or
-  your own CLI, not just Claude Code. Switch the underlying agent by switching
-  adapters.
+- **Any agent, same script** — run a workflow on Codex, Gemini, Qwen, Kimi, OMP,
+  Kilo, OpenCode, Cursor, or your own CLI, not just Claude Code. Switch the
+  underlying agent by switching adapters.
 - **Out of band** — runs are detached background workers backed by a run
   directory, so you can `status` / `logs --follow` / `pause` / `stop` them and
   watch from the browser — independent of any host agent session.
@@ -304,10 +304,23 @@ Claude Code's own runs stay strictly read-only.
 
 ## Configure adapters
 
-Codex, Claude Code, Gemini, Qwen, and Kimi work out of the box. The built-in
-`codex` and `claude` come **web-capable** — native `--search` for codex,
-WebSearch/WebFetch allowlisted for claude — so research workflows run with zero
-tuning. `odw init`
+Codex, Claude Code, Gemini, Qwen, Kimi, Oh My Pi, Kilo Code, OpenCode, and
+Cursor work out of the box:
+
+| Adapter | Local CLI | Non-interactive contract |
+| --- | --- | --- |
+| `codex` | `codex` | text on stdout; web search enabled |
+| `claude` | `claude` | text on stdout; WebSearch/WebFetch allowed |
+| `gemini` | `gemini` | text on stdout |
+| `qwen` | `qwen` | text on stdout |
+| `kimi` | `kimi` | text on stdout |
+| `omp` | `omp` | `--print --no-tools --no-session`; prompt on stdin |
+| `kilo` | `kilo` | `run --format json --auto`; final text decoded from JSONL |
+| `opencode` | `opencode` | `run --format json --auto`; final text decoded from JSONL |
+| `cursor` | `agent` | `--print --force --trust`; prompt on stdin |
+
+The built-in `codex` and `claude` adapters come **web-capable**, so research
+workflows run with zero tuning. `odw init`
 shows what's installed (with each CLI's permission posture) and sets the
 default — interactively at a terminal, as a plain report anywhere else, and
 `odw init --adapter <name>` writes the choice without prompting. To tune flags
@@ -328,6 +341,22 @@ commands — it never calls model APIs directly.
   }
 }
 ```
+
+Custom adapters default to trimmed text stdout. For JSONL event streams, declare
+the event and final-text path explicitly:
+
+```jsonc
+"output": {
+  "format": "jsonl",
+  "eventType": "text",
+  "textPath": ["part", "text"],
+  "select": "last"
+}
+```
+
+ODW keeps raw stdout/stderr in run diagnostics while returning only the decoded
+final response. On Windows, executable discovery follows `PATHEXT`, so normal
+`agent.cmd`, `kilo.cmd`, and `omp.exe` shims are detected without full paths.
 
 Config keys live at the **top level** — there is no `"settings"` wrapper, and odw
 warns about unknown or misplaced keys (with a did-you-mean hint) instead of

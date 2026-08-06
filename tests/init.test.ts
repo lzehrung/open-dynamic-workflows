@@ -7,7 +7,7 @@ import { PassThrough } from "node:stream";
 
 import { writeDefaultAdapter } from "../src/adapters/config.js";
 import { AdapterNotFound, ConfigError, isFatalError } from "../src/errors.js";
-import { cmdInit } from "../src/init.js";
+import { cmdInit, type InitFlags } from "../src/init.js";
 
 /** A temp dir with `bin/` stubs for the given CLIs, plus an isolating config file. */
 function sandbox(clis: string[]): { dir: string; configPath: string; cleanup: () => void } {
@@ -159,13 +159,14 @@ test("init: interactive Enter skips without writing, exit 1", async () => {
 test("init: --check forces report-only even at a TTY; CI/ODW_DETACH/dumb TERM do too", async () => {
   const sb = sandbox(["claude", "codex"]);
   try {
-    for (const [flags, env] of [
+    const cases: Array<readonly [InitFlags, Record<string, string | undefined>]> = [
       [{ check: true }, { TERM: "xterm" }],
       [{}, { TERM: "xterm", CI: "1" }],
       [{}, { TERM: "xterm", ODW_DETACH: "1" }],
       [{}, { TERM: "dumb" }],
-      [{}, {}], // TERM unset
-    ] as const) {
+    ];
+    if (process.platform !== "win32") cases.push([{}, {}]); // POSIX requires TERM; Windows consoles do not set it.
+    for (const [flags, env] of cases) {
       const err = sink(true);
       const code = await cmdInit(
         { ...flags, config: sb.configPath },

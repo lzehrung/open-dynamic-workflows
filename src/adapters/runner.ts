@@ -12,8 +12,11 @@
  */
 
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { extname, join } from "node:path";
 
 import type { CliResult } from "./types.js";
+import { resolveExecutable } from "./executable.js";
 
 export interface RunCommandOptions {
   stdin?: string;
@@ -43,9 +46,48 @@ export const runCommand: CommandRunner = (command, options = {}) => {
       return;
     }
 
-    const child = spawn(cmd, args, {
+    let executable = cmd;
+    let spawnArgs = args;
+    const env = options.env ?? process.env;
+    if (process.platform === "win32") {
+      const resolved = resolveExecutable(cmd, env, "win32");
+      const extension = resolved ? extname(resolved).toLowerCase() : "";
+      if (extension === ".cmd" || extension === ".bat") {
+        const script = resolved!.slice(0, -extension.length) + ".ps1";
+        if (!existsSync(script)) {
+          resolve({
+            returncode: 127,
+            stdout: "",
+            stderr:
+              `failed to launch '${cmd}': Windows batch shim '${resolved}' has no companion PowerShell script; ` +
+              "configure the adapter with a directly executable command",
+            timedOut: false,
+            duration: elapsed(),
+          });
+          return;
+        }
+        const systemRoot = env.SystemRoot || env.SYSTEMROOT || "C:\\Windows";
+        executable = join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+        spawnArgs = [
+          "-NoLogo",
+          "-NoProfile",
+          "-NonInteractive",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          script,
+          ...args,
+        ];
+      } else if (resolved) {
+        executable = resolved;
+      }
+    }
+
+
+    const child = spawn(executable, spawnArgs, {
       cwd: options.cwd,
-      env: options.env ?? (process.env as Record<string, string>),
+      env,
+      windowsHide: true,
     });
 
     let stdout = "";
