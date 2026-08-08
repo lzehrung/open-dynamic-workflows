@@ -26,7 +26,7 @@ test("new built-ins declare their automation, model, workspace, and output contr
   const { adapters } = defaultConfig();
   assert.deepEqual(adapters.omp!.flags?.model, ["--model"]);
   assert.ok(adapters.omp!.command.includes("--no-session"));
-  assert.ok(adapters.omp!.command.includes("--no-tools"));
+  assert.equal(adapters.omp!.command.includes("--approval-mode"), true);
   assert.equal(adapters.omp!.stdin, "{prompt}");
 
   for (const name of ["kilo", "opencode"]) {
@@ -47,6 +47,19 @@ test("new built-ins declare their automation, model, workspace, and output contr
   assert.ok(adapters.cursor!.command.includes("--trust"));
   assert.ok(adapters.cursor!.command.includes("{workspace}"));
   assert.equal(adapters.cursor!.stdin, "{prompt}");
+});
+
+// An adapter is only useful if it can act. A CLI started with its tools switched
+// off still answers every prompt — from the prompt text alone, with no error to
+// tell a real answer from a guess — so a tool-disabling flag in a built-in is a
+// silent correctness bug, not a conservative default.
+test("no built-in adapter starts its CLI with tools disabled", () => {
+  const TOOL_KILL_FLAGS = ["--no-tools", "--tools=none", "--disable-tools"];
+  for (const [name, adapter] of Object.entries(defaultConfig().adapters)) {
+    for (const flag of TOOL_KILL_FLAGS) {
+      assert.equal(adapter.command.includes(flag), false, `built-in '${name}' disables its tools via ${flag}`);
+    }
+  }
 });
 
 test("loadConfig merges a user file over the built-ins (user wins)", () => {
