@@ -99,3 +99,34 @@ test("T5: an option with no native carrier surfaces as an outcome note, never dr
     `expected a routing note, got ${JSON.stringify(out.notes)}`,
   );
 });
+
+test("new harness adapters send prompts on stdin and route workspace and model flags", async () => {
+  for (const name of ["omp", "kilo", "opencode", "cursor"]) {
+    const config = defaultConfig();
+    config.settings.defaultAdapter = name;
+    let command: string[] = [];
+    let stdin = "";
+    const raw =
+      name === "kilo" || name === "opencode"
+        ? JSON.stringify({ type: "text", part: { type: "text", text: `${name} answer` } })
+        : `${name} answer`;
+    const bridge = new Bridge(config, {
+      source: "/repo",
+      runner: async (actual, options) => {
+        command = actual;
+        stdin = options?.stdin ?? "";
+        return ok(raw);
+      },
+    });
+
+    const out = await bridge.run({ prompt: `ask ${name}`, model: `${name}/model` });
+    assert.equal(out.text, `${name} answer`);
+    assert.equal(out.cli?.stdout, raw);
+    assert.match(stdin, new RegExp(`ask ${name}`));
+    assert.equal(command.includes("{prompt}"), false);
+    assert.ok(command.includes("/repo"), `expected workspace in ${JSON.stringify(command)}`);
+    const modelFlag = command.indexOf("--model");
+    assert.ok(modelFlag >= 0, `expected model flag in ${JSON.stringify(command)}`);
+    assert.equal(command[modelFlag + 1], `${name}/model`);
+  }
+});

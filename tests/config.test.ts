@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import {
   defaultConfig,
+  executableCandidates,
   loadConfig,
   resolveAdapter,
   resolveClaudeWorkflowsRoot,
@@ -14,11 +15,38 @@ import {
 } from "../src/adapters/config.js";
 import { AdapterNotFound } from "../src/errors.js";
 
-test("defaultConfig ships the five built-in adapters", () => {
+test("defaultConfig ships all nine built-in adapters", () => {
   const cfg = defaultConfig();
-  for (const name of ["codex", "claude", "gemini", "qwen", "kimi"]) {
+  for (const name of ["codex", "claude", "gemini", "qwen", "kimi", "omp", "kilo", "opencode", "cursor"]) {
     assert.ok(cfg.adapters[name], `expected built-in adapter '${name}'`);
   }
+});
+
+test("new built-ins declare their automation, model, workspace, and output contracts", () => {
+  const { adapters } = defaultConfig();
+  assert.deepEqual(adapters.omp!.flags?.model, ["--model"]);
+  assert.ok(adapters.omp!.command.includes("--no-session"));
+  assert.ok(adapters.omp!.command.includes("--no-tools"));
+  assert.equal(adapters.omp!.stdin, "{prompt}");
+
+  for (const name of ["kilo", "opencode"]) {
+    const adapter = adapters[name]!;
+    assert.deepEqual(adapter.output, {
+      format: "jsonl",
+      eventType: "text",
+      textPath: ["part", "text"],
+      select: "last",
+    });
+    assert.ok(adapter.command.includes("--auto"));
+    assert.ok(adapter.command.includes("--dir"));
+    assert.ok(adapter.command.includes("{workspace}"));
+    assert.equal(adapter.stdin, "{prompt}");
+  }
+
+  assert.ok(adapters.cursor!.command.includes("--force"));
+  assert.ok(adapters.cursor!.command.includes("--trust"));
+  assert.ok(adapters.cursor!.command.includes("{workspace}"));
+  assert.equal(adapters.cursor!.stdin, "{prompt}");
 });
 
 test("loadConfig merges a user file over the built-ins (user wins)", () => {
@@ -31,7 +59,12 @@ test("loadConfig merges a user file over the built-ins (user wins)", () => {
         defaultAdapter: "codex",
         concurrency: 3,
         claudeWorkflowsRoot: "/tmp/claude-workflows",
-        adapters: { mine: { command: ["my", "{prompt}"] } },
+        adapters: {
+          mine: {
+            command: ["my", "{prompt}"],
+            output: { format: "jsonl", eventType: "answer", textPath: ["payload", "text"], select: "last" },
+          },
+        },
       }),
     );
     const cfg = loadConfig(p);
@@ -41,6 +74,12 @@ test("loadConfig merges a user file over the built-ins (user wins)", () => {
     assert.ok(cfg.adapters.mine, "user adapter present");
     assert.ok(cfg.adapters.claude, "built-ins still present");
     assert.deepEqual(cfg.adapters.mine!.command, ["my", "{prompt}"]);
+    assert.deepEqual(cfg.adapters.mine!.output, {
+      format: "jsonl",
+      eventType: "answer",
+      textPath: ["payload", "text"],
+      select: "last",
+    });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -111,6 +150,37 @@ test("an invalid adapter (no command) is rejected", () => {
   }
 });
 
+test("invalid adapter output declarations are rejected", () => {
+  const dir = mkdtempSync(join(tmpdir(), "odw-cfg-"));
+  try {
+    const p = join(dir, "odw.config.json");
+    writeFileSync(
+      p,
+      JSON.stringify({
+        adapters: {
+          bad: {
+            command: ["bad"],
+            output: { format: "jsonl", eventType: "text", textPath: [], select: "last" },
+          },
+        },
+      }),
+    );
+    assert.throws(() => loadConfig(p), /output\.textPath/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Windows executable candidates honor PATHEXT without duplicating extensions", () => {
+  assert.deepEqual(executableCandidates("agent", "win32", ".EXE;.CMD;.exe"), [
+    "agent",
+    "agent.EXE",
+    "agent.CMD",
+  ]);
+  assert.deepEqual(executableCandidates("agent.cmd", "win32", ".EXE;.CMD"), ["agent.cmd"]);
+  assert.deepEqual(executableCandidates("agent", "linux", ".EXE;.CMD"), ["agent"]);
+});
+
 // --- usability guardrails: unknown-key warnings & zero-config adapter pick ---
 
 import { collectConfigWarnings } from "../src/adapters/config.js";
@@ -149,7 +219,14 @@ test("collectConfigWarnings is silent on a fully valid config and on comment key
       "//": "also a comment",
       defaultAdapter: "claude",
       concurrency: 4,
-      adapters: { mine: { command: ["x"], stdin: "{prompt}", $comment: "ok" } },
+      adapters: {
+        mine: {
+          command: ["x"],
+          stdin: "{prompt}",
+          output: { format: "text" },
+          $comment: "ok",
+        },
+      },
     }),
     [],
   );
@@ -184,7 +261,7 @@ test("resolveAdapter with no default picks the sole adapter whose CLI is install
     writeFileSync(stub, "#!/bin/sh\n");
     chmodSync(stub, 0o755);
     process.env.PATH = join(dir, "bin");
-    const cfg = defaultConfig(); // five builtins, defaultAdapter null
+    const cfg = defaultConfig(); // nine builtins, defaultAdapter null
     assert.equal(resolveAdapter(cfg).name, "claude");
   } finally {
     process.env.PATH = oldPath;

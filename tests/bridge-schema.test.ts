@@ -44,3 +44,21 @@ test("schema: a fenced JSON reply is parsed and returned as an object", async ()
   const out = await bridge.run({ prompt: "p", schema: obj({ x: number() }) });
   assert.deepEqual(out.value, { x: 1 });
 });
+
+test("schema validation and retries use decoded JSONL final text", async () => {
+  const c = defaultConfig();
+  c.settings.defaultAdapter = "opencode";
+  c.settings.schemaRetries = 1;
+  let attempts = 0;
+  const bridge = new Bridge(c, {
+    runner: async () => {
+      attempts++;
+      const text = attempts === 1 ? "not json" : "{\"x\": 9}";
+      return ok(JSON.stringify({ type: "text", part: { type: "text", text } }));
+    },
+  });
+
+  const out = await bridge.run({ prompt: "p", schema: obj({ x: number() }) });
+  assert.deepEqual(out.value, { x: 9 });
+  assert.equal(out.attempts, 2);
+});

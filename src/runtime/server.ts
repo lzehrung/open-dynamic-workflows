@@ -580,7 +580,7 @@ function createDefaultChatRunner(): ChatTurnRunner {
           "never",
           "-",
         ],
-        { cwd, stdio: ["pipe", "pipe", "pipe"] },
+        { cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide: true },
       );
       let stderr = "";
       child.stdout.setEncoding("utf8");
