@@ -8,8 +8,9 @@ shell 出去执行一个本地命令，通过 stdin 或一个参数把拼好的 
 
 ## 内置适配器
 
-五个开箱即用、无需配置文件：`codex`、`claude`、`gemini`、`qwen`、`kimi`。它们用各自 CLI
-的非交互模式。
+九个开箱即用、无需配置文件：`codex`、`claude`、`gemini`、`qwen`、`kimi`、`omp`、`kilo`、
+`opencode`、`cursor`。它们用各自 CLI 的非交互模式。它们都声明了
+`flags.model: ["--model"]`（或该 CLI 的等价旗标），因此 `agent(..., { model })` 会生效。
 
 ### 权限：每个内置适配器能做什么
 
@@ -37,6 +38,37 @@ shell 出去执行一个本地命令，通过 stdin 或一个参数把拼好的 
 
 一种实用的最小权限分工：让 `claude` 写代码（acceptEdits）、让 `codex` 运行/验证
 （workspace-write 沙箱）——见 `examples/codex-claude-loop.js`。
+
+### `omp` 说明
+
+内置 `omp` 带着 `--no-tools`（适合纯文本扇出；对必须跑 `git diff` 的评审是致命的）。
+要恢复工具，覆盖该适配器——条目会**整份替换**内置，所以要重写完整 `command`，并保留
+模型载体：
+
+```json
+{
+  "adapters": {
+    "omp": {
+      "label": "Oh My Pi (tools enabled)",
+      "command": ["omp", "--print", "--no-session", "--approval-mode", "yolo", "--cwd", "{workspace}"],
+      "stdin": "{prompt}",
+      "flags": { "model": ["--model"] }
+    }
+  }
+}
+```
+
+然后在 **workflow 里**指定模型，而不是 `odw run`（没有 `--model` CLI 旗标）：
+
+```js
+await agent(prompt, {
+  adapter: 'omp',
+  model: 'openai-codex/gpt-5.6-terra:high',
+})
+```
+
+若某个托管 workflow 从不传 `opts.model`（例如库存的 `review-and-correct`），就把
+`"--model", "<id>"` 写进上述覆盖 `command`——单靠 `flags.model` 不会凭空造出值。
 
 ## 配置文件
 

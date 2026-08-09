@@ -73,6 +73,29 @@ return await agent(
 `adapter` 选择用哪个 CLI；`schema` 是一个原始 JSON Schema 对象（选项，不是全局）；
 `agentType` 是注入进 prompt 的**人设**，*不是* adapter 名。
 
+### 指定模型（含 `omp`）
+
+**没有**全局的 `odw run --model …`。模型按每次 `agent()` 调用选择。内置适配器
+（含 `omp`）声明了 `flags.model: ["--model"]`，只有该次调用设置了 `model` 时
+ODW 才会追加原生旗标：
+
+```js
+const [analysis, implementation] = await parallel([
+  () => agent('Analyze the design', {
+    adapter: 'omp',
+    model: 'openai-codex/gpt-5.6-terra:high',
+  }),
+  () => agent('Implement the change', {
+    adapter: 'codex',
+    model: 'gpt-5.3-codex',
+  }),
+])
+```
+
+模型 id 随 CLI 而异。覆盖 `omp` 适配器时务必保留
+`flags: { "model": ["--model"] }`，否则 `agent(..., { model })` 不会生效——详见
+[`references/adapters.md`](references/adapters.md)。
+
 **选择法则：** 下一步需要**一整批**结果一次到位（去重、计票、综合）时用 `parallel`；
 多阶段处理默认用 `pipeline`。
 

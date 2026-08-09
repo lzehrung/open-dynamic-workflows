@@ -22,8 +22,17 @@ agent(prompt, opts?) -> Promise<string | object>
   全局 phase 是共享的。
 - **opts.adapter** —— 用哪个配置好的 CLI（如 `"codex"`）；默认用配置里的 `defaultAdapter`。
 - **opts.model** —— 一个 model id，转发给该 adapter 声明的 model 旗标（如
-  `claude --model …`）。若 adapter 没在配置里声明 `flags.model`，该选项也不会被静默丢弃
-  ——运行日志里会出现一条路由说明。model id 不能跨 CLI 通用。
+  `omp --model …`、`claude --model …`）。内置适配器声明了 `flags.model: ["--model"]`，
+  只有该次调用设置了 `model` 时 ODW 才会追加旗标。没有全局的 `odw run --model`。若
+  adapter 没在配置里声明 `flags.model`，该选项也不会被静默丢弃——运行日志里会出现一条
+  路由说明，并使用 CLI 默认模型。model id 不能跨 CLI 通用。
+
+  ```js
+  await agent(prompt, {
+    adapter: 'omp',
+    model: 'openai-codex/gpt-5.6-terra:high',
+  })
+  ```
 - **opts.agentType** —— 注入进 prompt 的**人设**（如 `"code-reviewer"`），因此在任何 CLI
   上都生效。它**不是** adapter 名，永远不影响 adapter 选择——只有 `opts.adapter` 才会。
 - **opts.isolation** —— `"worktree"` 给这个 agent 一个一次性 **git worktree**（默认工作区就是 source 目录本身）。要求 source 是有提交的 git 仓库；agent 看到 HEAD，其改动以 diff 返回。

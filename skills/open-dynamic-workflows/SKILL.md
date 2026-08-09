@@ -83,6 +83,33 @@ outright, never silently passed through as a string).
 a global); `agentType` is a **persona** injected into the prompt — *not* an
 adapter name.
 
+### Pin a model (including `omp`)
+
+There is **no** run-wide `odw run --model …`. Model selection is per
+`agent()` call. Built-ins (including `omp`) declare `flags.model: ["--model"]`,
+so ODW appends the native flag only when that call sets `model`:
+
+```js
+const [analysis, implementation] = await parallel([
+  () => agent('Analyze the design', {
+    adapter: 'omp',
+    model: 'openai-codex/gpt-5.6-terra:high',
+  }),
+  () => agent('Implement the change', {
+    adapter: 'codex',
+    model: 'gpt-5.3-codex',
+  }),
+])
+```
+
+Model ids are CLI-specific (omp fuzzy-matches provider/model strings; Codex
+expects Codex ids). If an adapter omits `flags.model`, the request is **not**
+silently ignored — a routing note appears in the run logs and the CLI default
+is used. To change tools/flags for `omp` (its built-in ships `--no-tools`),
+override the adapter in config and **keep** `flags: { "model": ["--model"] }`
+so per-call `model` still works — see
+[`references/adapters.md`](references/adapters.md).
+
 **Rule of thumb:** use `parallel` when the next step needs the **whole batch**
 at once (dedup, tally, synthesis); default to `pipeline` for multi-stage work.
 

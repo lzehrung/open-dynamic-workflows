@@ -6,8 +6,10 @@ prompt via stdin or an argument and reading the reply from stdout.
 
 ## Built-in adapters
 
-Five ship out of the box, usable with no config file: `codex`, `claude`,
-`gemini`, `qwen`, `kimi`. They use each CLI's non-interactive mode.
+Nine ship out of the box, usable with no config file: `codex`, `claude`,
+`gemini`, `qwen`, `kimi`, `omp`, `kilo`, `opencode`, `cursor`. They use each
+CLI's non-interactive mode. All of them declare `flags.model: ["--model"]`
+(or the CLI's equivalent) so `agent(..., { model })` is honored.
 
 ### Permissions: what each built-in may do
 
@@ -40,6 +42,40 @@ equally privileged:
 A useful minimal-privilege split: let `claude` write code (acceptEdits) and let
 `codex` run/verify it (workspace-write sandbox) — see
 `examples/codex-claude-loop.js`.
+
+### `omp` notes
+
+Built-in `omp` runs with `--no-tools` (fine for pure-text fan-out; fatal for
+reviewers that must `git diff`). To restore tools, override the adapter — an
+entry **replaces** the built-in wholesale, so restate the full `command` and
+keep the model carrier:
+
+```json
+{
+  "adapters": {
+    "omp": {
+      "label": "Oh My Pi (tools enabled)",
+      "command": ["omp", "--print", "--no-session", "--approval-mode", "yolo", "--cwd", "{workspace}"],
+      "stdin": "{prompt}",
+      "flags": { "model": ["--model"] }
+    }
+  }
+}
+```
+
+Then pin the model **in the workflow**, not on `odw run` (there is no
+`--model` CLI flag):
+
+```js
+await agent(prompt, {
+  adapter: 'omp',
+  model: 'openai-codex/gpt-5.6-terra:high',
+})
+```
+
+If a managed workflow never passes `opts.model` (e.g. stock
+`review-and-correct`), bake `"--model", "<id>"` into that override `command`
+instead — `flags.model` alone cannot invent a value the workflow did not set.
 
 ## Config file
 

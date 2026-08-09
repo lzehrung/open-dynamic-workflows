@@ -25,9 +25,19 @@ other primitive organizes calls to it.
 - **opts.adapter** — which configured CLI to use (e.g. `"codex"`); defaults to
   the config's `defaultAdapter`.
 - **opts.model** — a model id forwarded to the adapter's declared model flag
-  (e.g. `claude --model …`). If the adapter declares no `flags.model` in config,
-  the option is not silently dropped — a routing note appears in the run's logs.
-  Model ids do not transfer across CLIs.
+  (e.g. `omp --model …`, `claude --model …`). Built-ins declare
+  `flags.model: ["--model"]`, so ODW appends that flag only when the call sets
+  `model`. There is no run-wide `odw run --model`. If the adapter declares no
+  `flags.model` in config, the option is not silently dropped — a routing note
+  appears in the run's logs and the CLI default is used. Model ids do not
+  transfer across CLIs (omp vs Codex vs Claude each expect their own ids).
+
+  ```js
+  await agent(prompt, {
+    adapter: 'omp',
+    model: 'openai-codex/gpt-5.6-terra:high',
+  })
+  ```
 - **opts.agentType** — a **persona** injected into the prompt (e.g.
   `"code-reviewer"`), so it works on every CLI. It is **not** an adapter name and
   never affects adapter selection — only `opts.adapter` does.
