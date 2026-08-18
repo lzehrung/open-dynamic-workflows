@@ -99,10 +99,6 @@ export const BUILTIN_ADAPTERS: Record<string, RawAdapter> = {
   },
   omp: {
     label: "Oh My Pi",
-    // NOT `--no-tools`: an adapter with no tools cannot read a file or run a
-    // command, so it answers every prompt from the prompt text alone — silently,
-    // with no error to distinguish a real answer from a guess. `--approval-mode
-    // yolo` is what makes the tools usable headlessly.
     command: ["omp", "--print", "--no-session", "--approval-mode", "yolo", "--cwd", "{workspace}"],
     stdin: "{prompt}",
     flags: { model: ["--model"] },
