@@ -25,8 +25,15 @@ test("defaultConfig ships all nine built-in adapters", () => {
 test("new built-ins declare their automation, model, workspace, and output contracts", () => {
   const { adapters } = defaultConfig();
   assert.deepEqual(adapters.omp!.flags?.model, ["--model"]);
-  assert.ok(adapters.omp!.command.includes("--no-session"));
-  assert.ok(adapters.omp!.command.includes("--no-tools"));
+  assert.deepEqual(adapters.omp!.command, [
+    "omp",
+    "--print",
+    "--no-session",
+    "--approval-mode",
+    "yolo",
+    "--cwd",
+    "{workspace}",
+  ]);
   assert.equal(adapters.omp!.stdin, "{prompt}");
 
   for (const name of ["kilo", "opencode"]) {

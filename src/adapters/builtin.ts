@@ -99,16 +99,7 @@ export const BUILTIN_ADAPTERS: Record<string, RawAdapter> = {
   },
   omp: {
     label: "Oh My Pi",
-    command: [
-      "omp",
-      "--print",
-      "--no-tools",
-      "--no-session",
-      "--approval-mode",
-      "yolo",
-      "--cwd",
-      "{workspace}",
-    ],
+    command: ["omp", "--print", "--no-session", "--approval-mode", "yolo", "--cwd", "{workspace}"],
     stdin: "{prompt}",
     flags: { model: ["--model"] },
   },
