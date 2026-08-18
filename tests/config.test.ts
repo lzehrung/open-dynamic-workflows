@@ -24,6 +24,7 @@ test("defaultConfig ships all nine built-in adapters", () => {
 
 test("new built-ins declare their automation, model, workspace, and output contracts", () => {
   const { adapters } = defaultConfig();
+  assert.deepEqual(adapters.omp!.flags?.model, ["--model"]);
   assert.deepEqual(adapters.omp!.command, [
     "omp",
     "--print",
