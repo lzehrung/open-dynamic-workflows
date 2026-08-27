@@ -72,7 +72,7 @@ export const BUILTIN_ADAPTERS: Record<string, RawAdapter> = {
   },
   gemini: {
     label: "Gemini CLI",
-    command: ["gemini", "--approval-mode", "auto_edit", "{prompt}"],
+    command: ["gemini", "--approval-mode", "auto_edit", "--prompt", "{prompt}"],
     flags: { model: ["--model"] },
   },
   qwen: {
@@ -81,8 +81,6 @@ export const BUILTIN_ADAPTERS: Record<string, RawAdapter> = {
     flags: { model: ["--model"] },
   },
   kimi: {
-    // kimi's `--model` expects an alias pre-declared in its config.toml, so the
-    // value is forwarded syntactically but may need that alias to resolve.
     label: "Kimi CLI",
     command: [
       "kimi",
