@@ -109,9 +109,11 @@ Make the plan executable and the claims checkable.
 * PR CI: `npm ci`, `npm run typecheck`, `npm test`, cheap build smoke.
 * Add `docs/security-boundary.md`: the boundary table, the trust decision, actors, attack surfaces,
   ODW-owned mitigations, harness-owned mitigations, residual risks.
-* Add `docs/adapters.md`: what "first-class" and "experimental" mean, the required behaviors
-  (detect, run, capture output, timeout, cancel where possible, schema handling, permission mapping,
-  env policy, workspace mode, result normalization), and the generated capability matrix.
+* Extend the existing `skills/open-dynamic-workflows/references/adapters.md` (and its zh-CN mirror)
+  instead of adding a new adapter doc. It already documents per-built-in permission posture; it
+  gains the definition of "first-class" vs "experimental", the required behaviors (detect, run,
+  capture output, timeout, cancel where possible, schema handling, permission mapping, env policy,
+  workspace mode, result normalization), and the generated capability matrix.
 * Add a one-line precedence note to each overlapping planning doc.
 
 ## Inventory, do not rebuild
@@ -125,7 +127,8 @@ least-privilege sidecar capability model.
 ## Acceptance
 
 * CI runs on PRs.
-* Two security/adapter docs exist; no doc claims a guarantee the code does not provide.
+* One new doc only (`docs/security-boundary.md`); the adapter contract lives in the existing skill
+  reference. No doc claims a guarantee the code does not provide.
 * Roadmap conflicts are resolved in writing.
 
 ---
@@ -241,10 +244,15 @@ interface AdapterCapabilities {
 * Checks: detect, echo, large prompt, read-only, workspace write, schema, events, usage, timeout,
   cancel, no-secret-leak, workspace isolation reporting, unsupported-capability failure.
 * Live-CLI runs stay opt-in behind an env flag.
+* Seed from the hand-verified per-CLI flag table already in `docs/tasks/cli.md` (model flag, system
+  prompt, native schema, worktree, token usage for claude/codex/gemini/qwen/kimi). Keep its
+  proven-versus-documented distinction as the `verified` field, extend it to omp/kilo/opencode/cursor,
+  and generate it from then on.
 
 ## Acceptance
 
-* The capability matrix in `docs/adapters.md` is generated, not hand-maintained.
+* The capability matrix is generated into the skill adapter reference, not hand-maintained, and
+  `docs/tasks/cli.md` links to it instead of carrying its own copy.
 * No adapter is `firstClass` without passing conformance.
 * Workspace isolation is reported as runtime-owned, harness-owned, or unsupported — never implied.
 
@@ -270,7 +278,15 @@ Say exactly what the workspace modes do.
 
 * Keep `src/workspace.ts` as the single implementation; strengthen dirty-tree handling and cleanup
   of locked worktrees (already covered by tests — keep them).
-* Update every doc that calls a workspace mode "sandboxing".
+* Fix the documentation drift this plan exists to prevent. The code has `inplace` + `worktree`; these
+  still describe a `copy` mode that no longer exists:
+  * `skills/open-dynamic-workflows/references/adapters.md` — `{workspace}` "an isolated copy in
+    `copy` mode", and its zh-CN mirror
+  * `docs/tasks/cli.md` — `workspaceMode: copy | inplace`, task T4's "worktree maps to copy
+    isolation", and the "copy ≠ real git worktree" limitation note
+  * `docs/dynamic-workflows-tech-plan.md` — the L-layer description of copy-isolated runs
+* Stop calling any workspace mode "sandboxing". Keep the word "sandbox" for the harness feature and
+  for the planned replay-determinism guard the READMEs mention; those are different things.
 
 ## Acceptance
 
@@ -319,6 +335,11 @@ Add regression tests for: DNS-rebinding attempt, cross-origin write attempt, ove
 non-loopback write refusal, Chat Host launching only its fixed built-in workflow source, Tauri
 capability file (no broad shell spawn, no broad remote URL), and sidecar argument validation.
 
+Desktop constraint from `docs/tasks/gui.md` (G5): the Tauri shell is written but has never been
+compiled in this environment — no `cargo`/`rustc`/`@tauri-apps/cli`. Desktop checks are therefore
+static assertions over `capabilities/default.json` and the sidecar argument builder, not build or
+runtime tests, until a machine with the toolchain exists.
+
 ## Acceptance
 
 * Each server guard has a test that fails if the guard is removed.
@@ -356,7 +377,9 @@ All four must hold before any code lands:
 
 # Phase 8 — Deferred: durable resume
 
-Owner: ODW. Deferred until Phases 2–6 are done.
+Owner: ODW. Deferred until Phases 2–6 are done. `docs/dynamic-workflows-tech-plan.md` already scopes
+resume/journaling and the replay-determinism guard as post-v1 work; this plan does not duplicate that
+design, it only records the packaging constraint.
 
 If it happens: JSONL step index beside the run directory, atomic writes, coordinator restarts from
 the top, completed steps return cached results, failed/cancelled/timed-out steps rerun. Step key
@@ -373,7 +396,7 @@ State the repo constraints and the shortcuts that are forbidden: TypeScript stri
 dependencies, SEA awareness, tests before behavior changes, fixture-based adapter tests, live CLI
 tests behind env flags, no silent downgrades, concise docs. Name where code goes (adapters, process,
 workspace, conformance, server, desktop) and what is banned (real CLI calls in unit tests, broad env
-inheritance, calling copy/worktree "sandboxing", calling a command template a first-class harness
+inheritance, calling a workspace mode "sandboxing", calling a command template a first-class harness
 contract).
 
 ---
