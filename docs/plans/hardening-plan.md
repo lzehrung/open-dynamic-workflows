@@ -41,8 +41,8 @@ this plan except as something ODW must report accurately.
 ODW is **trusted-code workflow orchestration**.
 
 * `src/loader.ts` compiles workflow source into a host-process `AsyncFunction` with injected
-  primitives. Verified in-session: that construction reaches `process` and `await import("node:fs")`.
-  It is a source transform, not a sandbox.
+  primitives. Confirmed by construction: the compiled function reaches `process` and
+  `await import("node:fs")`. It is a source transform, not a sandbox.
 * Harness sandbox settings constrain the *agent's* tools, not ODW's parent process. Claude Code's OS
   sandbox covers Bash and its descendants, requires WSL2/container/VM on Windows, and leaves hooks
   and MCP servers as unconstrained host processes. Codex `--sandbox` scopes model-generated shell
