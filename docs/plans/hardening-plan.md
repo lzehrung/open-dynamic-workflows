@@ -2,468 +2,516 @@
 
 ## Purpose
 
-ODW runs Claude-style dynamic workflows against coding-agent CLIs. Hardening means ODW's own seams
-are correct, bounded, and honest. It does not mean ODW becomes a sandbox provider.
+ODW runs trusted workflow code against local coding-agent CLIs. Hardening means ODW's own
+boundaries are correct, bounded, and honest. ODW is not a sandbox provider.
 
-Goals, in priority order:
+Priorities:
 
-1. **Truthful execution.** What a run reports about its adapter, permissions, and workspace is what
-   actually happened.
-2. **Bounded child processes.** ODW controls environment, time, output, and process trees.
-3. **Honest capability reporting.** Per-harness support is proven by conformance, never inferred
-   from command flags.
-4. **Debuggable runs.** A failure is diagnosable from run artifacts without a rerun.
-5. **No product drift.** Same workflow dialect, zero runtime npm dependencies, SEA packaging,
-   Node >= 20, existing server/Tauri hardening preserved.
+1. Record what actually ran: adapter, model, permissions, workspace, limits, and result.
+2. Control every child process: environment, output, timeout, cancellation, and cleanup.
+3. Tie adapter claims to an exact contract, CLI version, platform, and test result.
+4. Preserve enough run data to diagnose a failure without rerunning it.
+5. Keep the workflow dialect, zero runtime npm dependencies, SEA packaging, Node >= 20, and the
+   browser dashboard. The retired Tauri shell does not return.
 
-## Design rules
-
-* Every item names its owner. If the owner is a harness or the deployment, ODW documents and reports
-  it — ODW does not reimplement it.
-* Deleting a false claim beats implementing a weak imitation of it.
-* No new subsystem without a test that a real bug class would trip.
-* No new file format, command, or doc unless it removes ambiguity a user actually hits.
-* Extend existing modules; do not grow a parallel "v2" tree beside working code.
-
-## Security responsibility boundary
+## Responsibility boundary
 
 | Layer | Owns | Does not provide |
 | --- | --- | --- |
-| ODW | workflow-source trust policy, environment policy, subprocess lifecycle and limits, server ingress, workspace semantics, truthful capability reporting, run artifacts | containment of its own runtime, a harness's tool permissions, OS-level isolation |
-| Harness | agent tool permissions, native sandboxing, provider approval flows | containment for ODW's workflow runtime or arbitrary helper processes |
-| Deployment | real containment: container, VM, or least-privileged OS account | workflow intent; it cannot repair a false ODW claim |
+| ODW | workflow-source trust rules, environment selection, process lifecycle and limits, server ingress, workspace behavior, adapter reporting, run records | containment of its workflow runtime, harness tool policy, OS isolation |
+| Harness | agent tool permissions, native sandbox features, provider approval and authentication | containment of ODW or unrelated host processes |
+| Deployment | container, VM, account, filesystem, process, and network isolation | workflow intent or truthful ODW reporting |
 
-Read the table as an assignment of work, not a disclaimer. Anything in row 2 or 3 is out of scope for
-this plan except as something ODW must report accurately.
+ODW must report harness and deployment limits. It must not imitate them.
 
-## Trust decision (settled)
+## Trust model
 
-ODW is **trusted-code workflow orchestration**.
+ODW is **trusted-code workflow orchestration**. `src/loader.ts` executes source twice: `meta` through
+`new Function(...)` and the body through `AsyncFunction(...)`. Both can reach host globals. Compile
+and validation steps are not security boundaries.
 
-* `src/loader.ts` compiles workflow source into a host-process `AsyncFunction` with injected
-  primitives. Confirmed by construction: the compiled function reaches `process` and
-  `await import("node:fs")`. It is a source transform, not a sandbox.
-* Harness sandbox settings constrain the *agent's* tools, not ODW's parent process. Claude Code's OS
-  sandbox covers Bash and its descendants, requires WSL2/container/VM on Windows, and leaves hooks
-  and MCP servers as unconstrained host processes. Codex `--sandbox` scopes model-generated shell
-  commands. These are not a portable security contract.
-* Therefore unreviewed, generated, or remote workflow source requires an external OS boundary.
-  Harness sandboxing alone is insufficient.
-* Restricted in-process execution is **conditional** work (Phase 7), not a default direction.
-
-Server exposure is narrower than earlier drafts claimed: the Chat Host launches one fixed built-in
-workflow source and chat text arrives as `args.prompt`. The live risk is prompt-driven agent action,
-not browser-supplied workflow RCE. Any future route that accepts arbitrary workflow source moves the
-trust boundary and must clear the Phase 7 gate first.
-
-## Cut from this plan, and why
-
-| Cut | Reason |
+| Source | Rule |
 | --- | --- |
-| in-process JS sandbox, `node:vm` isolation | Node documents `node:vm` as not a security mechanism |
-| static rejection of `import`/`require`/`process`/`fs` as containment | that is lint; a string-built dynamic import defeats it |
-| ODW-enforced network policy (deny/allowlist/proxy) | ODW cannot constrain a child's network; owner is the OS/container |
-| generic cross-harness permission emulation | map and report; never emulate another product's permission model |
-| parallel `src/adapters/v2/**` tree with V1 compatibility shim | two adapter models is the larger risk; evolve the existing types |
-| `odw.policy.json` as a new file format | fold the few real knobs into existing config |
-| five hand-written harness docs | generate the capability matrix from conformance output |
-| `copy` workspace mode | ODW has `inplace` (default) and `worktree`; a third mode adds cost, not safety |
-| `roleBased` / `roundRobin` / `costAware` routing | no demonstrated need; explicit `adapter` already works |
-| SQLite-backed run state | breaks zero-dependency/SEA constraints; the run directory stays the source of truth |
-| `odw inspect` / `odw tail` / `odw events` commands | `odw status`, `odw logs [--follow]`, and `odw result` already cover this |
-| `odw config migrate-env` command | the config linter already has a warning channel; print the converted shape there |
-| Windows console-hiding as a hardening phase | completed platform maintenance; `windowsHide: true` is already set at every production spawn site |
+| Local file or managed local workflow | The caller trusts it. Record the resolved path and content hash. |
+| Fixed built-in inline source | Record its identity and hash. Server routes may launch only the reviewed built-in they name. |
+| Agent-generated source | Show or save it for review. Never run it automatically. |
+| Remote source | Unsupported by this plan. |
+| Programmatic `startRunFromSource` | The caller is the trust decision. Record `origin` and source hash. |
 
-## Planning authority
+`validate(source)` may warn about Node APIs, `process`, and dynamic imports. These are trust and
+portability warnings, never containment claims.
 
-* Supersedes prior CLI/runtime/adapter hardening plans only.
-* The GUI/Tauri roadmap stays valid unless a phase below explicitly changes it.
-* Reconcile once, in the first PR: `docs/ROADMAP.md`, `docs/tasks/launch.md`, `docs/tasks/gui.md`,
-  `docs/tasks/cli.md`, `docs/dynamic-workflows-tech-plan.md`.
+## Current facts
 
-## Permanent invariants
+Keep the existing concurrency limit, 1,000-dispatch guard, config warnings, detached run workers,
+real git worktrees, per-call adapter routing, run directory, loopback server default, Host check,
+JSON write guard, origin check, and remote-write refusal.
 
-Cheap, partly enforced today, and the reason this plan exists. Every future adapter change keeps them:
+Do not overstate them:
 
-* Every built-in adapter is non-interactive and keeps its tools enabled. A tool-less or interactive
-  default does not fail loudly — it returns confident guesswork.
-* Built-in command vectors are asserted exactly in tests, never by substring.
-* `odw.config.example.json` equals the built-ins, so copying the example cannot silently drop a
-  capability.
-* No capability exists in the capability model without a conformance check.
-* Anything ODW cannot verify is reported as `unverified`, never as a guarantee.
-* No silent downgrade of permission mode, workspace mode, schema handling, or event mode.
+- stop does not cancel an active harness process;
+- timeout kills only the direct child;
+- direct Chat Host Codex uses a separate unbounded spawn path;
+- worktree diffs are not persisted by workflow runs;
+- the budget is successful final reply characters divided by four, not provider tokens or cost;
+- tests are not type-checked by the current `tsconfig.json`;
+- Windows tests have exposed a detached-worker cleanup race after terminal completion;
+- Tauri and Launch were retired and their files are absent.
+
+## Permanent rules
+
+- Every production child process has a named lifecycle policy.
+- A requested option is honored or rejected, never silently downgraded.
+- Every built-in command has an independent exact expected-value test.
+- Every built-in adapter entry in `odw.config.example.json` matches its built-in contract. The
+  example's overall settings are not identical to `defaultConfig()`.
+- Built-ins are non-interactive and do not add a blanket tool-disable flag. Exact tools and
+  restrictions remain harness-specific.
+- Published evidence applies only to the exact normalized contract it tested. Any override makes
+  that evidence unknown.
+- Worktrees isolate edits; they are not a security boundary.
+- `no_changes` and `not_observed` are different states.
+- Reports never contain environment values, full prompts, or prompt-bearing expanded argv.
+- Raw outputs, args, chat transcripts, and diffs are sensitive.
+- Unsupported and unverified are different states.
+- Generated capability data has one source and is not hand-edited.
+
+## Out of scope
+
+- in-process sandboxing or `node:vm` as security;
+- static keyword rejection as containment;
+- ODW network enforcement or cross-harness permission emulation;
+- a parallel adapter V2 tree, compatibility shim, or new policy file;
+- `copy` workspace mode;
+- role-based, round-robin, or cost-aware routing;
+- SQLite run state or a new secret store;
+- generic log-redaction guarantees;
+- new `inspect`, `tail`, `events`, `artifacts`, or `report` commands;
+- Tauri or desktop-shell work;
+- restricted execution without a selected external containment provider;
+- durable resume.
+
+Restricted execution needs a separate provider-specific plan. Durable resume is declined here:
+restarting arbitrary JavaScript can repeat filesystem, network, and process effects; cached agent
+replies do not make those effects safe.
 
 ---
 
-# Phase 0 — Baseline and CI
+# Phase 0 — Baseline truth and CI
 
 Owner: ODW.
 
-## Objective
+## Deliver
 
-Make the plan executable and the claims checkable.
+- Add PR CI on Linux, Windows, and macOS with Node 20.
+- Run `npm ci`, source and test type-checking, `npm test`, and `npm run build`.
+- Fix the Windows cleanup race at its source; do not hide it with retries.
+- Check generated dashboard and skill files, local Markdown links, the built CLI, and one mock
+  workflow. Execute every SEA binary in release CI.
+- Add `docs/security-boundary.md` and include it in the npm package.
+- Mark stale plans as superseded by `docs/ROADMAP.md`, which says Tauri and Launch are retired.
+- Correct all current `copy`-mode claims, false workspace-sandbox claims, the OMP `--no-tools`
+  claim, broad “persists everything” wording, and hard-token-budget wording. Use a repository-wide
+  check, not a fixed file list.
+- Add the repository `AGENTS.md` now. Record strict TypeScript, zero runtime dependencies, SEA
+  awareness, exact adapter fixtures, live-CLI gates, and the bans on silent downgrade and false
+  sandbox claims.
+- Until Phase 4 replaces it, label `permissionNote()` as **flag-derived and unverified**.
 
-## Change
+## Prove
 
-* PR CI: `npm ci`, `npm run typecheck`, `npm test`, cheap build smoke.
-* Add `docs/security-boundary.md`: the boundary table, the trust decision, actors, attack surfaces,
-  ODW-owned mitigations, harness-owned mitigations, residual risks.
-* Extend the existing `skills/open-dynamic-workflows/references/adapters.md` (and its zh-CN mirror)
-  instead of adding a new adapter doc. It already documents per-built-in permission posture; it
-  gains the definition of "first-class" vs "experimental", the required behaviors (detect, run,
-  capture output, timeout, cancel where possible, schema handling, permission mapping, env policy,
-  workspace mode, result normalization), and the generated capability matrix.
-* Add a one-line precedence note to each overlapping planning doc.
-
-## Inventory, do not rebuild
-
-Existing strengths to document and keep: agent count cap, budget ceiling, output byte cap, timeout
-kill, config linter warnings, in-place execution plus optional git-worktree isolation with diff
-capture and cleanup, explicit per-call adapter routing, adversarial/cross-adapter examples, server
-loopback default, write guard, Host allowlist, body size caps, remote-write refusal, and the Tauri
-least-privilege sidecar capability model.
-
-## Acceptance
-
-* CI runs on PRs.
-* One new doc only (`docs/security-boundary.md`); the adapter contract lives in the existing skill
-  reference. No doc claims a guarantee the code does not provide.
-* Roadmap conflicts are resolved in writing.
+- CI passes on all three OS families; tests are type-checked.
+- The Windows terminal-run test releases its source directory.
+- `npm pack --dry-run` includes the security document.
+- Current docs contain none of the known false product claims above.
 
 ---
 
-# Phase 1 — Adapter defaults and contracts
+# Phase 1 — Complete adapter defaults and exact contracts
 
-Owner: ODW. Status: implemented; upstream PR open.
+Owner: ODW. Current state: core OMP and Gemini fixes exist; acceptance is incomplete.
 
-## Objective
+## Deliver
 
-Remove the bug class where a harness runs but does not do the work.
+- Keep OMP tools enabled and Gemini headless through `--prompt`.
+- Add independent exact expected objects for Codex, Claude, Gemini, Qwen, Kimi, OMP, Kilo,
+  OpenCode, and Cursor. Replace substring assertions.
+- Keep example-to-built-in equality for adapter entries only; correct its wording.
+- Record prompt transport honestly. Gemini and Qwen put prompts in argv, which exposes them to
+  process inspection and platform command-length limits.
+- Prefer stdin for future built-ins. Fail before spawn when ODW can prove an expanded argv is too
+  large.
 
-## Change
+## Prove
 
-* OMP keeps its tools (`--no-tools` removed).
-* Gemini runs headlessly through `--prompt`, not a positional query that can attach to a TTY.
-* `odw.config.example.json` reproduces every built-in contract exactly.
-* Tests assert exact command vectors, example/built-in equality, and Gemini's headless invocation.
-
-## Acceptance
-
-* No built-in disables tools or depends on interactive mode.
-* A copied example config behaves identically to the built-ins.
-* Adding a built-in requires an exact-contract test.
+- Every built-in has one exact contract test independent of the example file.
+- No built-in needs an interactive terminal or a blanket tool-disable flag.
+- Docs state argv prompt exposure and large-prompt limits where they apply.
 
 ---
 
-# Phase 2 — Process and environment layer
+# Phase 2 — Process lifecycle
 
-Owner: ODW. This is the highest-value remaining work.
+Owner: ODW.
 
-## Objective
+## Deliver
 
-Give ODW real control over what it spawns, since that is the part ODW actually owns.
+Every production spawn uses one policy:
 
-## Problem
+| Policy | Use | Contract |
+| --- | --- | --- |
+| Managed | adapters and direct Chat Codex | timeout, abort, output limits, streamed chunks, tree cleanup, structured result |
+| Detached worker | workflow worker | spawn error handling, PID, heartbeat, source-directory release, interruption detection |
+| Bounded helper | git and other short helpers | timeout, output cap, structured failure |
+| Browser handoff | open browser | detached best effort, no execution guarantee |
 
-`Bridge.invoke()` and `runCommand()` default to `process.env`; adapter `env` is additive only, so a
-config cannot subtract an inherited credential. A compromised or over-eager harness therefore
-inherits host secrets.
+Keep one shared process layer. Do not create a second runner tree.
 
-## Change
+Replace `returncode + timedOut` inference with:
+
+- termination: `exit`, `signal`, `timeout`, `cancelled`, `output_limit`, or `spawn_error`;
+- exit code or signal, duration, retained stdout/stderr, observed byte counts, fired limit, and cleanup
+  result;
+- stdout, stderr, and total caps. The default total memory bound stays at or below 32 MiB;
+- byte chunks or streamed files instead of repeated large string concatenation.
+
+Cancellation and cleanup:
+
+- managed runs accept `AbortSignal`;
+- stop aborts active adapter calls before blocking future dispatches;
+- pause blocks new dispatches but does not claim to suspend active children;
+- POSIX uses a process group, TERM grace period, then KILL;
+- Windows uses `taskkill.exe /T /F` for best-effort descendant cleanup;
+- partial output survives every failure path;
+- descendant cleanup is reported as best effort, never containment.
+
+Detached workers:
+
+- spawn errors mark the run failed;
+- workers write a heartbeat;
+- inspection turns a dead worker with a stale heartbeat into terminal `interrupted`;
+- workers release the source directory before terminal completion is visible;
+- CLI, dashboard, and run folding understand `interrupted`.
+
+## Prove
+
+- timeout, cancellation, signal, output limit, and spawn error remain distinct;
+- child and grandchild cleanup tests run on Linux and Windows;
+- `odw stop` aborts an active mock harness;
+- direct Chat Codex uses the managed path;
+- dead workers become `interrupted`, `--wait` returns non-zero, and Windows can remove the source.
+
+---
+
+# Phase 3 — Environment policy
+
+Owner: ODW for selection and reporting; Harness for authentication; Deployment for filesystem and
+account isolation.
+
+## Model
 
 ```ts
-interface EnvPolicy {
-  mode: "inherit" | "empty";
-  allow?: string[];
-  set?: Record<string, string>;
-  deny?: string[];
-}
+type EnvPolicy =
+  | { mode: "inherit"; deny?: string[]; set?: Record<string, string> }
+  | { mode: "allowlist"; allow: string[]; set?: Record<string, string> };
 ```
 
-* `envPolicy` per adapter; `env` remains legacy shorthand for
-  `{ mode: "inherit", set: { ... } }` for one release cycle.
-* `envPolicy` wins when both are present, and the config linter prints the converted shape.
-* Generalize the existing runner: per-stream output caps, process-tree cleanup where the platform
-  supports it, an explicit timeout-vs-cancel distinction in the result, structured exit info.
-* Keep prompt transport as is (stdin, argv, prompt file) — it already works.
+Use `envPolicy` per adapter and `chatEnvPolicy` for direct Chat Codex.
 
-## Tests
+## Deliver
 
-* timeout kills the child process tree
-* per-stream output cap holds and preserves partial output on non-zero exit
-* `mode: "empty"` yields only allowed variables
-* `deny` removes an inherited secret
-* legacy `env` still works; both fields present warns; converted shape is stable
-* prompt-file cleanup runs on success and on failure
+- `inherit`: copy host values, remove `deny`, then apply `set`.
+- `allowlist`: copy only `allow`, then apply `set`.
+- Reject `allow` in inherit mode and `deny` in allowlist mode.
+- Match names case-insensitively on Windows.
+- Resolve the top-level executable before filtering. Do not add `PATH`, `HOME`, `SystemRoot`, proxy,
+  locale, or auth values silently.
+- Reports may show key names and mode, never values.
+- Warn that `set` is plain config and that filtering does not protect credential files.
+- Map legacy `env` to inherit + set. If both fields exist, `envPolicy` wins and the warning prints
+  the new shape. Name the release that removes `env`.
+- Keep inherit as the compatibility default; recommend allowlist on sensitive hosts.
 
-## Acceptance
+## Prove
 
-* An adapter can be given a minimal environment without editing ODW.
-* Defaults stay `inherit`, so existing setups do not change behavior silently.
+- allow, deny, set precedence, malformed modes, and Windows name matching have tests;
+- a resolved adapter launches without a child `PATH`;
+- a denied sentinel never reaches mock adapter or Chat Codex;
+- reports and warnings never expose values;
+- legacy conversion is stable.
 
 ---
 
-# Phase 3 — Capability model and conformance
+# Phase 4 — Adapter contract and evidence
 
-Owner: ODW (reporting). Harness owns the underlying behavior.
+Owner: ODW for the model and reporting; Harness for the behavior.
 
-## Objective
+## Deliver
 
-Replace flag-shaped guesses with proven, reported capability.
+Replace the flat `AdapterCapabilities` proposal with three records:
 
-`permissionNote()` today derives a human string from command flags. It reports; it does not verify.
-That is acceptable only while ODW says so plainly.
+1. **Contract:** exact normalized config facts—prompt transport and exposure, output protocol,
+   model carrier, runtime and optional native schema paths, native usage fields, harness-specific
+   permission profile, maturity, and contract hash.
+2. **Evidence:** per-claim `tested`, `documented`, `declared`, or `unknown`, with source, CLI version,
+   platform, date, and contract hash. `unsupported` is a capability value, not evidence.
+3. **Effective run facts:** adapter, contract hash, model, prompt transport, permission profile,
+   schema path, workspace observation, environment mode, termination, and evidence used.
 
-## Change
+Rules:
 
-Extend `src/adapters/types.ts` in place:
+- command, output, permission, or environment overrides change the contract hash and invalidate
+  shipped evidence;
+- a requested model without a carrier fails before spawn;
+- runtime schema validation always exists; native schema is an extra path and names its dialect;
+- permission profiles stay harness-specific, not a false portable enum;
+- workspace and cancellation stay out of adapter capability data because ODW owns them;
+- estimated output tokens stay out because ODW computes them;
+- remove `permissionNote()` after displays use contract and evidence records;
+- classify every built-in as first-class or experimental. Initial first-class candidates are Codex,
+  Claude, OMP, and OpenCode; all others remain experimental until they meet the same evidence bar.
 
-```ts
-type PermissionMode = "readOnly" | "workspaceWrite" | "fullAccess";
-type PromptTransport = "argv" | "stdin" | "promptFile";
-type WorkspaceMode = "inplace" | "worktree" | "external";
-type EventMode = "text" | "json" | "jsonl";
+## Prove
 
-interface AdapterCapabilities {
-  prompt: PromptTransport[];
-  events: EventMode[];
-  permissions: PermissionMode[];
-  workspace: WorkspaceMode[];
-  schema: "native" | "runtime";
-  cancel: boolean;
-  usage: "reported" | "estimated" | "unsupported";
-  verified: boolean;
-}
+- contract hashes are deterministic and one-token changes invalidate evidence;
+- custom and overridden adapters display unknown evidence;
+- unsupported model requests fail before spawn;
+- every claim has evidence or explicit unknown;
+- no global `verified` boolean, workspace capability, or cancel capability remains.
+
+---
+
+# Phase 5 — Contract tests and live CLI evidence
+
+Owner: ODW for testing and publication; Harness for the tested behavior.
+
+## Deliver
+
+**Every PR:** mock binaries test ODW only—resolution, argv/stdin/prompt file, cwd, environment,
+decoding, schema routing, limits, cancellation, unsupported-option failure, and fact recording. Call
+these contract tests, not conformance.
+
+**Scheduled CI:** install available CLIs and record `--version` and `--help` facts on supported OSes.
+
+**Before release and after a built-in contract change:** the release owner runs one authenticated
+core scenario for each first-class candidate. Record CLI version, OS, time, ODW commit, contract
+hash, and evidence source. Missing credentials mean “not tested,” never “passed.” Use dedicated
+low-privilege accounts or profiles.
+
+Core live checks: echo, large prompt, workspace posture, model selection, schema, output protocol,
+native usage when claimed, timeout, cancellation, and absence of a denied environment sentinel.
+
+Publication:
+
+- keep reviewed evidence in one checked-in machine-readable manifest;
+- generate `skills/open-dynamic-workflows/references/capabilities.generated.md` from it;
+- link both language guides to that generated file;
+- extend `odw init --check --json` to show the local contract, evidence, CLI version, and permission
+  profile;
+- local checks never rewrite published evidence or docs. Do not add `doctor` or `conformance`
+  commands.
+
+## Prove
+
+- mock results are never labeled as real-CLI proof;
+- first-class status requires current live evidence for the exact contract hash;
+- all nine built-ins have a maturity state;
+- the generated matrix has one source and ships with any skill release that links to it.
+
+---
+
+# Phase 6 — Workspace truth and attempt artifacts
+
+Owner: ODW.
+
+## Deliver
+
+Workspace terms:
+
+- `inplace`: run in the source; ODW does not observe changes;
+- `worktree`: run at committed `HEAD`, capture a diff;
+- external isolation is source provenance, not a third workspace mode.
+
+Worktree mode fails before spawn if the repository has staged, tracked, or untracked changes. The
+error explains that those changes would be missing and suggests commit or in-place mode. Do not
+stash, create a temporary commit, or add dirty-copy behavior.
+
+Persist each agent and schema attempt:
+
+```text
+agents/<agentId>/attempts/<attempt>/
+  attempt.json
+  stdout.log
+  stderr.log
+  diff.patch          # worktree only
 ```
 
-* `agentType` stays persona/task shaping. `adapter` stays harness selection. No re-merging.
-* Capability mismatch fails by default; `allowDowngrade: true` warns visibly.
-* Conformance harness under `src/conformance/`: mock binaries plus event fixtures, driven by
-  `odw adapters conformance --adapter <id>` and summarized by `odw adapters doctor`.
-* Checks: detect, echo, large prompt, read-only, workspace write, schema, events, usage, timeout,
-  cancel, no-secret-leak, workspace isolation reporting, unsupported-capability failure.
-* Live-CLI runs stay opt-in behind an env flag.
-* Seed from the hand-verified per-CLI flag table already in `docs/tasks/cli.md` (model flag, system
-  prompt, native schema, worktree, token usage for claude/codex/gemini/qwen/kimi). Keep its
-  proven-versus-documented distinction as the `verified` field, extend it to omp/kilo/opencode/cursor,
-  and generate it from then on.
+`attempt.json` records effective facts, prompt hash and byte count, termination, output byte and
+truncation state, diff state, warnings, and artifact paths. It contains no prompt or environment
+values.
 
-## Acceptance
+Rules:
 
-* The capability matrix is generated into the skill adapter reference, not hand-maintained, and
-  `docs/tasks/cli.md` links to it instead of carrying its own copy.
-* No adapter is `firstClass` without passing conformance.
-* Workspace isolation is reported as runtime-owned, harness-owned, or unsupported — never implied.
+- capture worktree diff before cleanup on success and failure;
+- use `captured`, `no_changes`, or `not_observed`;
+- normalize patch paths and line endings;
+- record cleanup failure as a warning;
+- keep capped stdout/stderr; do not retain per-agent prompts;
+- use `0700` run directories and `0600` files on POSIX; document inherited Windows ACLs;
+- run and chat data persist until the user deletes them;
+- do not promise generic secret redaction;
+- resolve the invocation before `agent_started`; terminal events link to exact attempts;
+- add native usage or harness tool events only when observed by a tested parser;
+- do not add `phase_finished` without a real closing API, or file-change events for in-place mode.
 
----
+## Prove
 
-# Phase 4 — Workspace semantics
-
-Owner: ODW. Edit isolation only.
-
-## Objective
-
-Say exactly what the workspace modes do.
-
-## Modes
-
-* `inplace` — current default; the agent edits the source directory; no diff artifact; not a
-  security boundary.
-* `worktree` — throwaway `git worktree`; concurrent-edit isolation and a stable diff; not a security
-  boundary; absolute paths and symlinks still escape.
-* `external` — caller supplies an already-isolated workspace; ODW makes no isolation claim.
-
-## Change
-
-* Keep `src/workspace.ts` as the single implementation; strengthen dirty-tree handling and cleanup
-  of locked worktrees (already covered by tests — keep them).
-* Fix the documentation drift this plan exists to prevent. The code has `inplace` + `worktree`; these
-  still describe a `copy` mode that no longer exists:
-  * `skills/open-dynamic-workflows/references/adapters.md` — `{workspace}` "an isolated copy in
-    `copy` mode", and its zh-CN mirror
-  * `docs/tasks/cli.md` — `workspaceMode: copy | inplace`, task T4's "worktree maps to copy
-    isolation", and the "copy ≠ real git worktree" limitation note
-  * `docs/dynamic-workflows-tech-plan.md` — the L-layer description of copy-isolated runs
-* Stop calling any workspace mode "sandboxing". Keep the word "sandbox" for the harness feature and
-  for the planned replay-determinism guard the READMEs mention; those are different things.
-
-## Acceptance
-
-* Docs, `--help`, and dashboard text agree with the code's default (`inplace`).
-* Diff output stays stable across platforms.
+- dirty worktree source fails before spawn;
+- success, failure, and cancellation preserve diff and partial output;
+- in-place records `not_observed`;
+- cleanup failure is visible and locked cleanup remains covered;
+- POSIX artifacts are private and records contain no prompt or environment values;
+- legacy runs still load.
 
 ---
 
-# Phase 5 — Run inspection and artifacts
+# Phase 7 — Run report and inspection
 
 Owner: ODW.
 
-## Objective
+## Deliver
 
-Make a failed run diagnosable without rerunning it.
+Write versioned `report.json` at terminal completion. If a worker dies, the next inspection builds an
+interrupted report from durable run and attempt records.
 
-## Change
+Report:
 
-* Normalize the event vocabulary already emitted: run started/finished/failed, phase
-  started/finished, agent started/text, tool started/finished where a harness reports it, file
-  changed, usage, warning, error.
-* Add `odw artifacts <runId>` (final result, structured results, diffs, logs, raw adapter event
-  files, prompt files if policy retains them).
-* Add `odw report <runId> --format markdown|json`: workflow, args, git commit, adapter/model per
-  step, permission mode, workspace mode, changed files, diff, usage, retries, downgrades, warnings,
-  failures.
+- workflow identity, origin, source path/hash, git commit, and dirty state at launch;
+- terminal state and times;
+- adapter, contract hash, CLI version, model, permission profile/evidence, environment mode, and
+  workspace observation per agent;
+- attempt count, termination, truncation, artifact references, and observed diff state;
+- native provider usage with provider units;
+- separate ODW `estimatedOutputTokens`;
+- warnings, unsupported requests, failures, and cleanup problems.
 
-## Acceptance
+It references existing `meta.json` args instead of copying them. It never contains prompts,
+prompt-bearing argv, environment values, or cross-provider token comparisons.
 
-* Every downgrade and unverified capability appears in the report.
-* No new command duplicates `status`, `logs`, or `result`.
+Inspection:
+
+- add `odw status <runId> --json` for report or current partial facts;
+- add `odw status <runId> --dir` for the run directory;
+- keep logs for events and result for the final value;
+- render the same report in the dashboard;
+- keep old runs readable with absent facts shown as unknown;
+- keep zero runtime dependencies and SEA support.
+
+## Prove
+
+- success, failure, cancellation, timeout, output limit, and interruption produce truthful reports;
+- schema retries preserve every attempt;
+- custom overrides, worktree, and in-place appear correctly;
+- report JSON is stable across OSes and contains no sensitive prompt or environment values;
+- status, logs, result, dashboard, and report agree.
 
 ---
 
-# Phase 6 — Server and desktop regression tests
+# Phase 8 — Server hardening and regression tests
 
 Owner: ODW.
 
-## Objective
+## Boundary
 
-Lock the mitigations that already exist.
+Chat Host ODW turns launch one fixed built-in workflow. User text is `args.prompt`, not workflow
+source. The request may still select an adapter and existing working directory, so the agent has that
+adapter's authority there. Normal chat turns also launch direct read-only Codex.
 
-## Change
+## Deliver
 
-Add regression tests for: DNS-rebinding attempt, cross-origin write attempt, oversized body,
-non-loopback write refusal, Chat Host launching only its fixed built-in workflow source, Tauri
-capability file (no broad shell spawn, no broad remote URL), and sidecar argument validation.
+- keep direct Chat Codex on the managed process path with `chatEnvPolicy`, and cancel it when the
+  server closes;
+- bound stored Chat responses and mark truncation;
+- enforce body limits in bytes, not JavaScript string characters;
+- require an allowed Host on loopback requests, including when Host is missing;
+- keep JSON Content-Type, same-origin checks, and all remote writes disabled;
+- keep off-loopback reads as a trusted-network choice and print that run, workflow, and chat data are
+  exposed without authentication;
+- keep the fixed workflow source invariant;
+- do not add remote writes or token authentication here;
+- remove all Tauri acceptance items.
 
-Desktop constraint from `docs/tasks/gui.md` (G5): the Tauri shell is written but has never been
-compiled in this environment — no `cargo`/`rustc`/`@tauri-apps/cli`. Desktop checks are therefore
-static assertions over `capabilities/default.json` and the sidecar argument builder, not build or
-runtime tests, until a machine with the toolchain exists.
+Keep current cross-origin, MIME, and oversized-body tests. Add only missing tests: hostile/missing
+Host, Unicode byte overflow, actual off-loopback write refusal, fixed source replacement attempts,
+direct Chat timeout/cancel/output/close behavior, denied environment sentinel, and remote-read
+warning.
 
-## Acceptance
+## Prove
 
-* Each server guard has a test that fails if the guard is removed.
-* If desktop is out of scope for a release, release notes say so.
-
----
-
-# Phase 7 — Conditional: restricted execution
-
-Owner: Deployment (containment) with ODW integration. Do not start without the gate below.
-
-## Gate
-
-All four must hold before any code lands:
-
-1. An external containment provider is selected (container, VM, or least-privileged OS account).
-2. The coordinator and every launched harness run inside that provider.
-3. The coordinator's environment is empty by default and its IPC surface is narrow and enumerated.
-4. The behavior is tested on every supported platform.
-
-## Change, once gated
-
-* Separate-process coordinator; injected primitives over IPC.
-* `odw run --trust-mode restricted` and `odw serve --default-trust-mode restricted`.
-* Per-request trust escalation rejected unless the server config explicitly allows it.
-
-## Acceptance
-
-* `restricted` is absent rather than misleading when no provider is available.
-* When present, the provider demonstrably prevents access outside the declared environment,
-  filesystem, network, and process policy.
-* `trusted` remains the compatibility default.
-
----
-
-# Phase 8 — Deferred: durable resume
-
-Owner: ODW. Deferred until Phases 2–6 are done. `docs/dynamic-workflows-tech-plan.md` already scopes
-resume/journaling and the replay-determinism guard as post-v1 work; this plan does not duplicate that
-design, it only records the packaging constraint.
-
-If it happens: JSONL step index beside the run directory, atomic writes, coordinator restarts from
-the top, completed steps return cached results, failed/cancelled/timed-out steps rerun. Step key
-hashes workflow source, call path, prompt, adapter, model, permission mode, workspace mode, schema,
-and relevant args. No new runtime dependency. SEA build must still work.
-
----
-
-# Phase 9 — AGENTS.md
-
-Owner: ODW.
-
-State the repo constraints and the shortcuts that are forbidden: TypeScript strict mode, zero runtime
-dependencies, SEA awareness, tests before behavior changes, fixture-based adapter tests, live CLI
-tests behind env flags, no silent downgrades, concise docs. Name where code goes (adapters, process,
-workspace, conformance, server, desktop) and what is banned (real CLI calls in unit tests, broad env
-inheritance, calling a workspace mode "sandboxing", calling a command template a first-class harness
-contract).
+- every server-started child is managed;
+- removing any guard breaks a focused test;
+- browser and server wording agree on unauthenticated remote reads and refused remote writes.
 
 ---
 
 # PR sequence
 
-| PR | Content | State |
-| --- | --- | --- |
-| 1 | Adapter defaults and exact contracts (Phase 1) | open upstream |
-| 2 | CI, `docs/security-boundary.md`, `docs/adapters.md`, precedence notes (Phase 0) | next |
-| 3 | `EnvPolicy` + runner generalization (Phase 2) | after 2 |
-| 4 | Capability model on existing adapter types (Phase 3) | after 3 |
-| 5 | Conformance harness, `odw adapters doctor` / `odw adapters conformance`, generated matrix (Phase 3) | after 4 |
-| 6 | Conformance runs for Codex, Claude, OMP, OpenCode; Cursor marked experimental (Phase 3) | after 5 |
-| 7 | Workspace semantics and doc corrections (Phase 4) | after 3 |
-| 8 | Artifacts and report (Phase 5) | after 5 |
-| 9 | Server/Tauri regression tests (Phase 6) | parallel to 7–8 |
-| 10 | `AGENTS.md` (Phase 9) | last |
-| — | Restricted execution (Phase 7) | blocked on gate |
-| — | Durable resume (Phase 8) | deferred |
+This is merge order, not remote PR status.
 
----
+| PR | Content | Depends on |
+| --- | --- | --- |
+| 1 | CI, security boundary, doc fixes, AGENTS.md, unverified permission label | — |
+| 2 | Complete exact built-in contracts and example wording | 1 |
+| 3 | Process lifecycle, cancellation, worker interruption, Chat process path | 1 |
+| 4 | Adapter and Chat environment policy | 3 |
+| 5 | Contract, evidence, and effective-run-fact model | 2–4 |
+| 6 | Contract tests, live evidence, generated matrix, `init --check --json` | 5 |
+| 7 | Dirty-worktree rule and per-attempt artifacts | 3, 5 |
+| 8 | Versioned report and current-command inspection options | 6–7 |
+| 9 | Remaining server hardening and regression tests | 3–4, 8 |
+
+No restricted-execution or resume PR is reserved.
 
 # Release gates
 
 ## Alpha
 
-* CI green on PRs.
-* Boundary and adapter docs exist and match the code.
-* Permanent invariants enforced by tests.
-* `EnvPolicy` and the generalized runner shipped, defaults unchanged.
-* Capability model plus conformance harness exist; Codex, Claude, OMP, and OpenCode pass core
-  conformance; Cursor is explicitly experimental.
-* Workspace docs match the `inplace` default.
+- CI passes on Linux, Windows, and macOS with Node 20; source and tests type-check.
+- Security, trust, workspace, budget, and adapter docs match code.
+- Every built-in has an exact command test.
+- Process lifecycle and environment policy ship with stated compatibility defaults.
+- Stop cancels active harnesses and dead workers become interrupted.
 
 ## Beta
 
-* Artifacts and report commands work.
-* Server and Tauri regression tests exist.
-* `AGENTS.md` exists.
-* One cross-harness example produces structurally comparable results on Codex, Claude, and OpenCode,
-  with harness differences visible in the report.
+- Contract, evidence, and effective-run-fact records ship.
+- All built-ins are first-class or experimental; first-class entries have reviewed live evidence.
+- Attempt artifacts are durable and private by default.
+- `report.json`, status JSON, and dashboard agree.
+- Server regression tests pass.
 
 ## 1.0
 
-* Capability matrix is generated and published; no doc claims an unverified capability.
-* Restricted execution is either shipped behind a real containment provider or documented as out of
-  scope.
-* Durable resume is decided: shipped SEA-safe, or explicitly declined.
-* Security limitations are explicit, including that ODW's own runtime is not contained.
+- The generated matrix comes from the reviewed evidence manifest.
+- No doc presents a flag, mock result, or override as verified harness behavior.
+- Codex, Claude, OMP, and OpenCode release checks produce the same report structure while preserving
+  provider-specific differences.
+- SEA binaries are smoke-tested on every release platform.
+- Limits are explicit: trusted source, no ODW containment, environment filtering does not protect
+  files, worktrees are edit isolation, tree cleanup is platform-limited, and remote reads have no
+  authentication.
+- Restricted execution and durable resume remain out of scope.
 
----
+# Core decision
 
-# Core bet
-
-Keep ODW's language and product shape. Harden only the seams ODW owns: adapter truthfulness,
-environment and process control, workspace semantics, server ingress, and run inspection. Delegate
-agent-tool sandboxing to each harness and real containment to the deployment, and say so in the
-product rather than approximating it in code.
-
----
+Keep ODW's language and product shape. Harden only the boundaries ODW owns: source trust, process and
+environment control, adapter truth, workspace behavior, server ingress, and durable run facts.
+Harnesses own their permissions; deployments own containment. ODW reports those limits instead of
+approximating them.
 
 # Revision note
 
-This revision narrows ownership. It adds the responsibility boundary, records the trusted-source
-decision with the evidence behind it, promotes adapter truthfulness to a permanent invariant after a
-real `--no-tools` incident, and removes eleven work items ODW should not own — including the
-in-process sandbox, network policy enforcement, a parallel adapter V2 tree, a new policy file, three
-redundant inspection commands, and SQLite state. Phase count drops from fourteen to ten, and the PR
-sequence from eighteen to ten with two explicitly blocked or deferred.
+This revision removes Tauri, gated restricted execution, and speculative resume; moves AGENTS.md and
+known doc fixes to the baseline; splits process and environment work; replaces the flat capability
+model with contract, evidence, and effective facts; separates mock tests from live CLI evidence; and
+persists attempt data before adding reports.
