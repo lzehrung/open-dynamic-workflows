@@ -141,12 +141,19 @@ Owner: ODW. Current state: core OMP and Gemini fixes exist; acceptance is incomp
   process inspection and platform command-length limits.
 - Prefer stdin for future built-ins. Fail before spawn when ODW can prove an expanded argv is too
   large.
+- On Windows, every exact built-in contract declares its supported launch strategy.
+- First-class Windows support requires a directly executable native image. A built-in distributed
+  only as a script shim remains experimental or unsupported on Windows until an explicit strategy
+  has live evidence.
+- Direct `.exe` launch avoids a script interpreter; it does not prove the executable is trusted.
+  PATH and installation integrity remain user and deployment concerns.
 
 ## Prove
 
 - Every built-in has one exact contract test independent of the example file.
 - No built-in needs an interactive terminal or a blanket tool-disable flag.
 - Docs state argv prompt exposure and large-prompt limits where they apply.
+- Exact built-in tests cover the declared Windows launch strategy.
 
 ---
 
@@ -166,6 +173,17 @@ Every production spawn uses one policy:
 | Browser handoff | open browser | detached best effort, no execution guarantee |
 
 Keep one shared process layer. Do not create a second runner tree.
+
+Windows launch:
+
+- Resolve the exact launcher path before spawn and prefer a directly executable native image.
+- Remove the automatic `.cmd` or `.bat` to sibling `.ps1` translation. ODW never adds
+  `ExecutionPolicy Bypass` implicitly.
+- A script-only CLI must name its interpreter explicitly in the adapter command and declare that
+  strategy in its contract. ODW still passes arguments as a vector and does not use a shell.
+- Reject undeclared script fallback with an error that names the adapter, resolved candidate, and
+  accepted strategies.
+- Return resolved path, extension, and actual strategy for the Phase 6 attempt record.
 
 Replace `returncode + timedOut` inference with:
 
@@ -200,6 +218,10 @@ Detached workers:
 - `odw stop` aborts an active mock harness;
 - direct Chat Codex uses the managed path;
 - dead workers become `interrupted`, `--wait` returns non-zero, and Windows can remove the source.
+- Windows tests prefer and directly launch a native executable;
+- implicit `.cmd`, `.bat`, and sibling `.ps1` fallback fails before an interpreter starts;
+- an explicit custom interpreter receives literal arguments without shell interpolation;
+- no built-in or runner path adds `ExecutionPolicy Bypass` automatically.
 
 ---
 
@@ -250,24 +272,27 @@ Owner: ODW for the model and reporting; Harness for the behavior.
 
 Replace the flat `AdapterCapabilities` proposal with three records:
 
-1. **Contract:** exact normalized config facts—prompt transport and exposure, output protocol,
-   model carrier, runtime and optional native schema paths, native usage fields, harness-specific
-   permission profile, maturity, and contract hash.
+1. **Contract:** exact normalized config facts—prompt transport and exposure, Windows launch
+   strategy, output protocol, model carrier, runtime and optional native schema paths, native usage
+   fields, harness-specific permission profile, and contract hash.
 2. **Evidence:** per-claim `tested`, `documented`, `declared`, or `unknown`, with source, CLI version,
    platform, date, and contract hash. `unsupported` is a capability value, not evidence.
-3. **Effective run facts:** adapter, contract hash, model, prompt transport, permission profile,
-   schema path, workspace observation, environment mode, termination, and evidence used.
+3. **Effective run facts:** adapter, contract hash, resolved executable and launch strategy, model,
+   prompt transport, permission profile, schema path, workspace observation, environment mode,
+   termination, and evidence used.
 
 Rules:
 
-- command, output, permission, or environment overrides change the contract hash and invalidate
-  shipped evidence;
+- command, prompt transport, output, option carrier, or permission-declaration changes alter the
+  contract hash and invalidate shipped evidence;
+- environment policy is recorded separately and invalidates only claims that depend on it;
 - a requested model without a carrier fails before spawn;
 - runtime schema validation always exists; native schema is an extra path and names its dialect;
 - permission profiles stay harness-specific, not a false portable enum;
 - workspace and cancellation stay out of adapter capability data because ODW owns them;
 - estimated output tokens stay out because ODW computes them;
 - remove `permissionNote()` after displays use contract and evidence records;
+- maturity lives in the reviewed evidence manifest, not in the contract hash;
 - classify every built-in as first-class or experimental. Initial first-class candidates are Codex,
   Claude, OMP, and OpenCode; all others remain experimental until they meet the same evidence bar.
 
