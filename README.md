@@ -11,7 +11,7 @@ fleets — same scripts as Claude Code's own Workflow tool, plus a live web dash
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/Node-%E2%89%A520-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](tsconfig.json)
-[![tests](https://img.shields.io/badge/tests-275%20passing-brightgreen.svg)](tests)
+[![tests](https://github.com/xz1220/open-dynamic-workflows/actions/workflows/ci.yml/badge.svg)](https://github.com/xz1220/open-dynamic-workflows/actions/workflows/ci.yml)
 [![runtime deps](https://img.shields.io/badge/runtime%20deps-0-blue.svg)](package.json)
 
 [English](README.md) · [简体中文](README.zh-CN.md)
@@ -61,10 +61,11 @@ mode you have probably met; each mechanism is a runnable pattern in this repo:
 
 - **Portable** — run the *same* workflow script on Codex, Claude Code, Gemini,
   Qwen, Kimi, OMP, Kilo, OpenCode, Cursor, or your own CLI. Switch adapters.
-- **Claude Code's dialect, complete** — `export const meta` + injected
+- **Claude-style workflow primitives** — `export const meta` + injected
   `agent` / `parallel` / `pipeline` / `phase` / `log` / `args` / `budget` /
   `workflow` globals (nested workflows included), with top-level `await` and
-  `return`. A script written for Claude Code runs here as-is, and vice versa.
+  `return`. Port scripts against the supported behavior in the
+  [compatibility checklist](#compatibility-and-migration).
 - **A live observatory with Chat Host** — talk to Codex in the browser, mention
   ODW or workflow to attach an asynchronous run, and watch CLI-launched jobs as
   live DAGs without polluting the host agent's context.
@@ -120,8 +121,12 @@ curl -fsSL https://raw.githubusercontent.com/xz1220/open-dynamic-workflows/main/
 
 Downloads the prebuilt binary for your platform (gzipped, ~35 MB) to
 `~/.local/bin/odw` and installs the skill into `~/.claude/skills/` (falling back
-to `~/.codex/skills/`). No Node required. Override with `ODW_BIN_DIR` /
-`ODW_VERSION`.
+to `~/.codex/skills/`). No Node required. `latest` resolves to one release tag;
+the binary and skill both come from that tag. All downloads and the new binary
+are validated before replacing an existing installation, with rollback if the
+replacement fails. Override the destination with `ODW_BIN_DIR`, or pin a release
+with `ODW_VERSION=v0.4.0`. `ODW_REF` explicitly overrides the skill's source ref
+for custom deployments; the default keeps it matched to the binary.
 
 ### 3. Manual
 
@@ -133,9 +138,12 @@ Prefer not to pipe `curl` into `sh`? Grab the asset for your OS/arch from
 gunzip odw-darwin-arm64.gz && chmod +x odw-darwin-arm64
 mv odw-darwin-arm64 ~/.local/bin/odw
 
-# b) the skill — copy skills/open-dynamic-workflows/ into your agent's skills dir
-git clone https://github.com/xz1220/open-dynamic-workflows.git
-cp -r open-dynamic-workflows/skills/open-dynamic-workflows ~/.claude/skills/open-dynamic-workflows
+# b) use the SAME release for the skill (set this to the version you downloaded)
+ODW_TAG=v0.4.0
+git clone --branch "$ODW_TAG" https://github.com/xz1220/open-dynamic-workflows.git
+skill_source=open-dynamic-workflows/skills/open-dynamic-workflows
+[ -d "$skill_source" ] || skill_source=open-dynamic-workflows/skill
+cp -r "$skill_source" ~/.claude/skills/open-dynamic-workflows
 ```
 
 Or, **once `odw` is published to npm** (not yet — see [Develop](#develop)) and you
@@ -147,6 +155,10 @@ for the skill). For now, use the binary above.
 > *drives* (`claude`, `codex`, …) remain their own CLIs you install separately.
 
 ## Quick start
+
+This README describes current source. For a released binary, use its bundled
+skill and `odw --help`; to use unreleased features, build from source as described
+under [Develop](#develop).
 
 One CLI installed (just `claude`, or just `codex`)? Zero config — skip ahead.
 Several? The installer already asked you to pick a default; `odw init` re-opens
@@ -206,19 +218,40 @@ control flow (loops, `if`, dedup) — no imports:
 | Primitive | Role |
 | --- | --- |
 | `agent(prompt, opts?)` | Run one coding agent on a subtask. The only verb that does work. Returns its text, or a validated object when `opts.schema` is set. |
-| `parallel(thunks)` | Run a batch concurrently and wait for all of it (**barrier**). A failed thunk becomes `null`. |
+| `parallel(thunks)` | Run a batch concurrently and wait for all of it (**barrier**). Recoverable failures become `null`; stop, budget, and dispatch-limit errors abort the run. |
 | `pipeline(items, ...stages)` | Stream each item through the stages independently (**no barrier**). Each stage gets `(prev, item, index)`. |
 | `phase(title)` / `log(msg)` | Group progress under a phase / emit a progress line. |
 | `schema` (JSON Schema) | A typed output contract for `agent`; the reply is validated and retried until it conforms. |
 | `args` | The workflow's input, injected verbatim. |
 | `budget` | `{ total, spent(), remaining() }` — scale depth to a token target. |
 | `workflow(ref, args?)` | Run another workflow inline (one level deep). The child shares this run's concurrency cap, agent counter, and budget; its phases group as their own DAG lanes. |
-| `validate(source)` | Compile-check a candidate workflow without executing it — the seam that lets workflows generate workflows. **ODW extension** (not in Claude Code's dialect). |
+| `validate(source)` | Parse and compile-check trusted source without running its workflow body. Metadata is evaluated during loading. **ODW extension** (not in Claude Code's dialect). |
 
 Use **`parallel`** when the next step needs the whole batch at once (dedup,
 tally, synthesis); **`pipeline`** for multi-stage work (the default). Keep
 reductions order-independent — branching on *which agent finished first* breaks
 reproducibility. Full reference: [`skills/open-dynamic-workflows/references/primitives.md`](skills/open-dynamic-workflows/references/primitives.md).
+
+## Compatibility and migration
+
+ODW implements the primitive surface below. Scripts that depend on a host's
+private runtime behavior need the following checks before migration:
+
+| Feature | ODW behavior and migration check |
+| --- | --- |
+| Nested `workflow()` | Implemented for one level, sharing the parent's scheduler, control and budget. Flatten deeper nesting. |
+| Model selection | Pass `agent(..., {model})` using that CLI's model ID. `meta.model` and phase metadata do not set execution defaults; an adapter without model routing support emits a note. |
+| `agentType` | A persona added to the prompt. It does not load a host's named subagent configuration or select an adapter. |
+| Worktree isolation | Starts from committed HEAD, excludes uncommitted edits, and cleans up afterward. Changes are not merged and `agent()` returns the reply, not a diff; put required deliverables in that reply or persist them explicitly. |
+| Budget | Estimates successful final reply tokens as `ceil(chars / 4)`. Inputs, failed calls and retry replies are not included. The guard stops later dispatches; already-running calls can exceed the target. |
+| JSON Schema | Supports the [documented subset](skills/open-dynamic-workflows/references/primitives.md#schema). Unknown constraints such as `$ref`, `const` and `oneOf` are not enforced. Use explicit object/array types and supported constraints. |
+| Script trust | Run trusted scripts only. The loader uses JavaScript evaluation, including metadata; validation and compatibility warnings are not a sandbox. |
+| Recovery | `resume` continues a paused live worker. `rerun` starts over; completed calls are not journaled and replayed after a crash. |
+
+The supported primitive names do not guarantee full runtime parity.
+`validate(source)` is an ODW extension and must be removed when targeting a host
+that does not provide it. Recoverable `null` results require an explicit choice:
+accept a partial result, retry, or fail when the task requires every item.
 
 ## Run and observe
 
@@ -426,11 +459,25 @@ Runnable, plain-JS workflows in [`examples/`](examples/):
 ## Develop
 
 ```bash
+npm ci                # install the locked build dependencies
 npm run build         # tsc → dist/
 npm test              # node:test suite, driven by a mock adapter (no real accounts)
 npm run typecheck     # tsc --noEmit
 npm run build:binary  # bundle + Node SEA + postject → a single self-contained ./build/odw
 ```
+
+To update a local source installation, build the updated checkout and run
+`npm install -g .`, then copy its `skills/open-dynamic-workflows/` directory into
+your agent's skills directory. Existing npm-linked checkouts use the rebuilt
+`dist/` immediately.
+
+`package.json` is the version source. Source builds identify themselves as
+`0.5.0-dev+g<revision>` (`.dirty` marks uncommitted changes); source archives use
+`0.5.0-dev+source`. Build scripts generate the embedded version before compiling
+or testing. Release builds set `ODW_RELEASE_TAG=v0.5.0` and require a clean
+checkout at that tag, matching package and lockfile versions, passing tests and
+type checks, and a binary that reports the expected version. The release workflow
+publishes only after all platform builds succeed.
 
 `build:binary` follows the standard single-executable recipe: [esbuild](https://esbuild.github.io/)
 bundles `dist/` (zero-dep ESM) into one CommonJS file, `node --experimental-sea-config`
@@ -446,6 +493,11 @@ into the host's `node`, so each target is built on its own runner.
 
 ## Status
 
+**0.5.0 development:** queued tasks recheck pause, stop, and budget before
+starting. Waiting commands detect a vanished worker instead of waiting forever.
+Upgrades keep the binary and skill on the same release and roll back replacement
+failures; source builds now report their revision.
+
 **What's new (unreleased, on `main`):** `odw run` now attaches a **live
 foreground view** in interactive terminals — Ctrl-C detaches, `odw attach`
 re-attaches, and pipes/CI keep the fire-and-poll contract. First-run
@@ -458,8 +510,8 @@ battle-tested [`deep-research-verified.js`](examples/deep-research-verified.js)
 ships with a cron-ready wrapper. Earlier on `main`: the dashboard's local
 **Chat Host** (hand ODW-mentioned turns to a real asynchronous run), the
 desktop (Tauri) app **retired** in favor of `odw serve`, and the dialect made
-**complete** — nested `workflow()` (shared scheduler/budget, one level deep),
-real `budget.spent()` accounting so `--budget` is a hard ceiling,
+broader — nested `workflow()` (shared scheduler/budget, one level deep),
+estimated `budget.spent()` accounting with a guard before later dispatches,
 `odw run --adapter <name>`, inline-source runs archived in their run directory,
 and a `validate()` primitive so workflows can generate workflows.
 
@@ -471,7 +523,7 @@ runs. See
 **Core runtime is shipped.** The full runtime is on `main` — the adapter layer, execution
 bridge, workspace isolation, the async scheduler, the injected primitives, the
 loader/transform, the JSON-Schema engine, the background runtime, and the `odw`
-CLI. **275 tests pass**, and the flagship [`examples/deep-research.js`](examples/deep-research.js)
+CLI. The regression suite runs in [CI](https://github.com/xz1220/open-dynamic-workflows/actions/workflows/ci.yml), and the flagship [`examples/deep-research.js`](examples/deep-research.js)
 runs end-to-end (plan → search → extract → vote → report).
 
 ### Roadmap (v1.5+)
