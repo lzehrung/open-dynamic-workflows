@@ -253,6 +253,50 @@ The supported primitive names do not guarantee full runtime parity.
 that does not provide it. Recoverable `null` results require an explicit choice:
 accept a partial result, retry, or fail when the task requires every item.
 
+## Security
+
+**The boundary.** Each agent CLI decides what its agent may do: its sandbox,
+its approvals, its tools. ODW cannot sandbox an agent. It starts the CLI with
+the flags in the adapter `command`, and nothing more. Within its own boundary,
+ODW is responsible for:
+
+- the processes it starts: timeouts and output limits end them;
+- its dashboard server: it listens on 127.0.0.1 by default;
+- the run data it stores: it is readable only by your user;
+- documenting what it passes to each CLI.
+
+**What this means for you.**
+
+- **Agents act as you.** An agent runs with your files, your network, and the
+  environment of `odw`, including any secrets in it. It can run commands and
+  scripts, and start other agents. A workflow runs many agents with no human
+  approval between steps.
+- **The built-ins auto-approve.** For example: Codex `--sandbox
+  workspace-write`, Claude Code `--permission-mode acceptEdits`, omp
+  `--approval-mode yolo`. See
+  [Permissions](skills/open-dynamic-workflows/references/adapters.md#permissions-what-each-built-in-may-do).
+  To make an agent stricter, change its `command` in `odw.config.json`.
+- **Workflow scripts run inside `odw`, with your permissions.** A script that an
+  agent wrote runs outside that agent's sandbox. Read it before you run it.
+- **`isolation: "worktree"` is not a sandbox.** It keeps edits out of your
+  working tree. The agent can still reach any path that you can.
+- **To contain agents, use the OS:** a container, a VM, or a separate user
+  account.
+
+**Where your data goes.**
+
+- `odw serve` with any `--host` other than 127.0.0.1, localhost, or ::1: anyone
+  who can reach the port can read runs, workflow sources, chat transcripts, and
+  settings (adapter commands and local paths), with no authentication. Writes
+  are refused.
+- The dashboard also shows Claude Code runs from every project in
+  `~/.claude/projects` (or `$CLAUDE_CONFIG_DIR/projects`). Set
+  `claudeJobsScope: "project"` to show only the served repository.
+- Run data in `~/.odw/runs` (arguments, prompts, agent output, logs, chat
+  transcripts) is readable only by your user on macOS and Linux.
+- The `gemini` and `qwen` built-ins pass the prompt as a command-line argument,
+  so other local users can see it in the process list.
+
 ## Run and observe
 
 In an interactive terminal, `odw run` attaches a **live foreground view** — every

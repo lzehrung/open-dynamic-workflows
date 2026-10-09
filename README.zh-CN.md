@@ -232,6 +232,42 @@ ODW 已实现下列原语能力。依赖宿主私有运行机制的脚本,迁移
 宿主时需要去掉。可恢复失败产生的 `null` 需要显式处理：接受部分结果、重试,或在要求完整
 交付时报告失败。
 
+## 安全
+
+**边界。** 每个 agent CLI 自己决定它的 agent 能做什么:沙箱、审批、工具。ODW 无法为 agent
+提供沙箱。它只用适配器 `command` 中的参数启动 CLI,仅此而已。在自身边界之内,ODW 负责:
+
+- 它启动的进程:超时和输出上限会结束它们;
+- 它的仪表盘服务:默认只监听 127.0.0.1;
+- 它保存的运行数据:只有你的用户可以读取;
+- 说明它向每个 CLI 传递了什么。
+
+**这对你意味着什么。**
+
+- **agent 以你的身份运行。** agent 能访问你的文件、你的网络,以及 `odw` 的环境变量
+  (包括其中的密钥)。它可以执行命令和脚本,也可以启动其他 agent。一个 workflow 会运行
+  多个 agent,步骤之间没有人工审批。
+- **内置适配器会自动批准。** 例如:Codex `--sandbox workspace-write`、Claude Code
+  `--permission-mode acceptEdits`、omp `--approval-mode yolo`。见
+  [权限说明](skills/open-dynamic-workflows/zh-CN/references/adapters.md#权限每个内置适配器能做什么)。
+  要让 agent 更严格,请在 `odw.config.json` 中修改它的 `command`。
+- **workflow 脚本在 `odw` 内运行,拥有你的权限。** agent 写出的脚本会在该 agent 的沙箱之外
+  运行。运行之前先阅读它。
+- **`isolation: "worktree"` 不是沙箱。** 它让修改不进入你的工作树,但 agent 仍然可以访问
+  你能访问的任何路径。
+- **要隔离 agent,请使用操作系统:** 容器、虚拟机或单独的用户账户。
+
+**你的数据会到哪里。**
+
+- `odw serve` 使用 127.0.0.1、localhost、::1 以外的 `--host` 时,任何能访问该端口的人都可以
+  在无认证的情况下读取运行记录、workflow 源码、聊天记录和设置(适配器命令和本地路径)。
+  写操作会被拒绝。
+- 仪表盘还会显示 `~/.claude/projects`(或 `$CLAUDE_CONFIG_DIR/projects`)下所有项目的
+  Claude Code 运行。设置 `claudeJobsScope: "project"` 可只显示被服务的仓库。
+- `~/.odw/runs` 中的运行数据(参数、提示词、agent 输出、日志、聊天记录)在 macOS 和 Linux
+  上只有你的用户可以读取。
+- 内置的 `gemini` 和 `qwen` 通过命令行参数传递提示词,本机其他用户可以在进程列表中看到。
+
 ## 运行与观测
 
 在交互式终端里,`odw run` 会附着一个**实时前台视图**——每个 agent 的启动、转轮、结算,
