@@ -77,7 +77,7 @@ shell 出去执行一个本地命令，通过 stdin 或一个参数把拼好的 
 
 | 键 | 含义 |
 | --- | --- |
-| `defaultAdapter` | 一次调用没指名适配器时用的适配器。未设置时：用唯一配置的那个，或——全新安装下——用 PATH 上唯一真实存在的那个 CLI |
+| `defaultAdapter` | 一次调用没指名适配器时用的适配器。未设置时：用唯一配置的那个，或——全新安装下——用唯一能运行的那个 CLI：它在 PATH 上，并且在 Windows 上 `odw` 能启动它 |
 | `concurrency` | 同时运行的 agent CLI 上限；省略则自动（`min(16, cpus-2)`） |
 | `maxAgents` | 单次运行总派发量的硬上限（防失控兜底） |
 | `timeout` | 每个 agent CLI 的超时（秒） |
@@ -112,3 +112,45 @@ shell 出去执行一个本地命令，通过 stdin 或一个参数把拼好的 
 
 只要一个 CLI 能读取 prompt（经 stdin 或一个参数）并把回复打印到 stdout，它就能接入。非零
 退出、超时，或可执行文件缺失，都会表现为一次失败的 agent 调用。
+
+### Windows 启动器
+
+在 Windows 上，`odw` 用 `PATH` 和 `PATHEXT` 解析 `command` 的第一个词元。这两个变量取自 CLI
+实际得到的环境：进程环境，再叠加适配器的 `env`。因此适配器里的 `env.PATH` 会改变 `odw`
+查找的位置，`odw init` 也在同一位置查找。读取这两个名字时不区分大小写，与 Windows 一致。
+然后 `odw` 不经过 shell 直接启动解析结果。结果的类型决定行为：
+
+- 原生 `.exe` 或 `.com` 文件直接运行。
+- 启动 Node 的 npm shim 以 `node <脚本>` 方式运行。npm shim 是 `npm install -g` 创建的
+  `.cmd` 文件。只有扩展名是 `.cmd`（不区分大小写），且整个文件内容都是 npm 会写出的内容时，
+  `odw` 才把它当作 npm shim。做了更多事的文件（例如设置了 `NODE_PATH`）不是 npm shim。
+  `odw` 使用 shim 旁边的 `node.exe`，没有时使用 `PATH` 上的 `node.exe`。参数和 stdin
+  原样送达。
+- 其他 `.cmd` 启动器会以退出码 127 失败，其中包括启动 Node 以外程序的 npm shim。`.bat`
+  文件无论内容是什么也会失败，因为 npm 不会写出 `.bat` shim。错误信息会指出该文件。请把
+  `command` 设为真正的可执行文件，或设为明确的解释器。
+- 其他任何文件也会以退出码 127 失败，包括 `.ps1`、`.js` 之类的脚本，以及没有扩展名的文件。
+  Windows 不能直接启动脚本。请把 `command` 设为解释器加脚本，例如 `["node", "agent.js"]`。
+
+`odw` 无法运行的启动器或脚本视为未安装。`odw init` 会在表格中显示原因。零配置的默认值绝不会
+选择带有这种启动器或脚本的适配器。
+
+Cursor 的 Windows 启动器 `agent.cmd` 会运行一个 PowerShell 脚本。`odw` 不能直接运行它，
+请自己调用 PowerShell。下面的覆盖配置与 Cursor 自己的 `agent.cmd` 做法一致：
+
+```json
+{
+  "adapters": {
+    "cursor": {
+      "command": ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                  "C:\\Users\\<you>\\AppData\\Local\\cursor-agent\\cursor-agent.ps1",
+                  "--print", "--force", "--trust", "--output-format", "text", "--workspace", "{workspace}"],
+      "stdin": "{prompt}",
+      "flags": { "model": ["--model"] }
+    }
+  }
+}
+```
+
+Windows PowerShell 5.1 在脚本把参数传给程序时，会丢掉内嵌的 `"` 字符和空参数。
+prompt 走 stdin，所以这一限制不影响 prompt。

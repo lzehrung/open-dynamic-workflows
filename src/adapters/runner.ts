@@ -12,11 +12,9 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { extname, join } from "node:path";
 
 import type { CliResult } from "./types.js";
-import { resolveExecutable } from "./executable.js";
+import { resolveExecutable, resolveWindowsLaunch } from "./executable.js";
 
 export interface RunCommandOptions {
   stdin?: string;
@@ -50,39 +48,32 @@ export const runCommand: CommandRunner = (command, options = {}) => {
     let spawnArgs = args;
     const env = options.env ?? process.env;
     if (process.platform === "win32") {
-      const resolved = resolveExecutable(cmd, env, "win32");
-      const extension = resolved ? extname(resolved).toLowerCase() : "";
-      if (extension === ".cmd" || extension === ".bat") {
-        const script = resolved!.slice(0, -extension.length) + ".ps1";
-        if (!existsSync(script)) {
-          resolve({
-            returncode: 127,
-            stdout: "",
-            stderr:
-              `failed to launch '${cmd}': Windows batch shim '${resolved}' has no companion PowerShell script; ` +
-              "configure the adapter with a directly executable command",
-            timedOut: false,
-            duration: elapsed(),
-          });
-          return;
-        }
-        const systemRoot = env.SystemRoot || env.SYSTEMROOT || "C:\\Windows";
-        executable = join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-        spawnArgs = [
-          "-NoLogo",
-          "-NoProfile",
-          "-NonInteractive",
-          "-ExecutionPolicy",
-          "Bypass",
-          "-File",
-          script,
-          ...args,
-        ];
-      } else if (resolved) {
-        executable = resolved;
+      const launch = resolveWindowsLaunch(cmd, args, env);
+      if ("error" in launch) {
+        resolve({ returncode: 127, stdout: "", stderr: launch.error, timedOut: false, duration: elapsed() });
+        return;
       }
+      executable = launch.executable;
+      spawnArgs = launch.args;
+    } else {
+      // `spawn` resolves a relative PATH entry, and a relative command such as
+      // `./bin/agent`, against `options.cwd`, while the readiness probe resolves
+      // them against the directory of odw. Run the file that the probe finds, so
+      // both agree. A command that the probe cannot find must not launch at all:
+      // `spawn` would search for it again, relative to the agent workspace.
+      const found = resolveExecutable(cmd, env, process.platform);
+      if (!found) {
+        resolve({
+          returncode: 127,
+          stdout: "",
+          stderr: `failed to launch '${cmd}': not found, or not an executable file, on the PATH of the launch environment`,
+          timedOut: false,
+          duration: elapsed(),
+        });
+        return;
+      }
+      executable = found;
     }
-
 
     const child = spawn(executable, spawnArgs, {
       cwd: options.cwd,

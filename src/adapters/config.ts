@@ -21,7 +21,7 @@ import { dirname, join } from "node:path";
 
 import { AdapterNotFound, ConfigError } from "../errors.js";
 import { BUILTIN_ADAPTERS, DEFAULT_SETTINGS, type RawAdapter } from "./builtin.js";
-import { isOnPath } from "./executable.js";
+import { adapterLaunchEnv, probeCommand } from "./executable.js";
 import type { Adapter, AdapterFlags, AdapterOutput, Config, Settings } from "./types.js";
 
 export const CONFIG_ENV_VAR = "ODW_CONFIG";
@@ -150,23 +150,35 @@ export function defaultConfig(): Config {
 /**
  * Resolve an adapter by name, falling back to the configured default, the sole
  * configured adapter, or — so a fresh install works with zero config — the sole
- * adapter whose CLI is actually installed. Raises {@link AdapterNotFound} with
- * the available names and how to pick one.
+ * adapter whose CLI can actually run (see {@link listAdapters}). Raises
+ * {@link AdapterNotFound} with the available names and how to pick one.
  */
 export function resolveAdapter(config: Config, name?: string | null): Adapter {
   const chosen = name ?? config.settings.defaultAdapter;
   const available = Object.keys(config.adapters).sort();
   if (!chosen) {
     if (available.length === 1) return config.adapters[available[0]!]!;
-    const installed = available.filter((n) => isOnPath(config.adapters[n]!.command[0]!));
+    const rows = listAdapters(config);
+    const installed = rows.filter((r) => r.installed).map((r) => r.name);
     if (installed.length === 1) return config.adapters[installed[0]!]!;
-    const found =
-      installed.length > 0
-        ? `installed here: ${installed.join(", ")}`
-        : "none of their CLIs were found on PATH";
+    // A CLI that is on PATH but that odw cannot launch was found. Say so.
+    const notes: string[] = [];
+    const blocked = rows.filter((r) => r.launchProblem !== undefined);
+    if (installed.length > 0) notes.push(`installed here: ${installed.join(", ")}`);
+    else if (blocked.length === 0) notes.push("none of their CLIs were found on PATH");
+    for (const r of blocked) notes.push(`${r.name} cannot run: ${r.launchProblem}`);
+    const found = notes.join("; ");
     // Name a REAL installed adapter in every suggested fix — a copy-pasteable
-    // remediation is the whole error UX for non-interactive (agent) callers.
-    const pick = installed[0] ?? available[0]!;
+    // remediation is the whole error UX for non-interactive (agent) callers. When
+    // nothing can run, no CLI is a valid pick: say what to do instead.
+    if (installed.length === 0) {
+      throw new AdapterNotFound(
+        `no adapter specified and no defaultAdapter set; available: ${available.join(", ")} (${found}). ` +
+          `Fix: install one of their CLIs and run 'odw init' to pick a default; ` +
+          `or set "defaultAdapter" in odw.config.json`,
+      );
+    }
+    const pick = installed[0]!;
     throw new AdapterNotFound(
       `no adapter specified and no defaultAdapter set; available: ${available.join(", ")} (${found}). ` +
         `Fix: run 'odw init' to pick a default (non-interactive: odw init --adapter ${pick}); ` +
@@ -245,8 +257,19 @@ export interface AdapterListing {
   name: string;
   /** Display label (adapter.label, else the name). */
   label: string;
-  /** Whether the CLI's executable resolves on PATH right now. */
+  /**
+   * Whether the CLI can run here. Its executable must resolve on PATH, as the
+   * adapter gets it: the process environment with the adapter's `env` on top.
+   * On Windows, odw must also be able to launch it. Every caller that needs
+   * "installed" reads this.
+   */
   installed: boolean;
+  /**
+   * Set when the executable resolves on PATH but odw cannot launch it, for
+   * example a Windows batch launcher that odw does not run. Then `installed` is
+   * false. The text is one short sentence that names the cause.
+   */
+  launchProblem?: string;
   /** Whether this is the configured defaultAdapter. */
   isDefault: boolean;
   /**
@@ -262,10 +285,12 @@ export function listAdapters(config: Config): AdapterListing[] {
     .sort()
     .map((name) => {
       const a = config.adapters[name]!;
+      const probe = probeCommand(a.command[0]!, adapterLaunchEnv(a));
       return {
         name,
         label: a.label ?? name,
-        installed: isOnPath(a.command[0]!),
+        installed: probe.status === "ready",
+        ...(probe.status === "unlaunchable" ? { launchProblem: probe.problem } : {}),
         isDefault: config.settings.defaultAdapter === name,
         permissionNote: permissionNote(a.command),
       };
@@ -307,7 +332,7 @@ function permissionNote(command: string[]): string {
   return notes.length ? notes.join(" · ") : `runs: ${command[0]}`;
 }
 
-export { executableCandidates, isOnPath } from "./executable.js";
+export { executableCandidates } from "./executable.js";
 
 /** Concrete concurrency cap, auto-derived from CPU count when unset. */
 export function resolveConcurrency(concurrency: number | null): number {

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +12,7 @@ import { createPrimitives } from "../src/primitives.js";
 import { RunStore } from "../src/runtime/run-store.js";
 import { startServer, type ServeHandle } from "../src/runtime/server.js";
 import { executeRun } from "../src/runtime/worker.js";
+import { CURSOR_AGENT_CMD } from "./windows-launcher-fixtures.js";
 
 // Regression tests for the high-effort review findings fixed on this branch.
 
@@ -181,3 +182,48 @@ test("an over-cap request body is rejected, not left hanging", async () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// A configured adapter whose launcher odw cannot run must fail at the request, with the cause.
+test(
+  "a Chat Host run with an adapter whose launcher odw cannot run is refused with the cause",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const root = mkdtempSync(join(tmpdir(), "odw-rf-"));
+    const oldPath = process.env.PATH;
+    const oldPathext = process.env.PATHEXT;
+    mkdirSync(join(root, "bin"));
+    writeFileSync(join(root, "bin", "agent.cmd"), CURSOR_AGENT_CMD); // Cursor's PowerShell launcher
+    process.env.PATH = join(root, "bin");
+    process.env.PATHEXT = ".exe;.cmd";
+    const { handle, store } = await boot(root);
+    try {
+      const session = (await (await post(`${handle.url}/api/chat/sessions`, {})).json()) as { id: string };
+      const res = await post(`${handle.url}/api/chat/sessions/${session.id}/messages`, {
+        text: "Use ODW workflow routing for this turn.",
+        adapter: "cursor",
+      });
+      assert.equal(res.status, 400);
+      const { error } = (await res.json()) as { error: string };
+      assert.match(
+        error,
+        /^adapter 'cursor' is configured but odw cannot launch its CLI: '.*agent\.cmd' is a batch launcher that odw cannot run\. See "Windows launchers"/,
+      );
+      assert.deepEqual(store.listRuns(), [], "no run starts");
+
+      // The settings snapshot carries the same cause for the dashboard.
+      const settings = (await (await fetch(`${handle.url}/api/settings`)).json()) as {
+        adapters: Array<{ name: string; installed: boolean; launchProblem?: string }>;
+      };
+      const cursor = settings.adapters.find((a) => a.name === "cursor");
+      assert.equal(cursor?.installed, false);
+      assert.match(cursor?.launchProblem ?? "", /batch launcher that odw cannot run/);
+    } finally {
+      await handle.close();
+      if (oldPath === undefined) delete process.env.PATH;
+      else process.env.PATH = oldPath;
+      if (oldPathext === undefined) delete process.env.PATHEXT;
+      else process.env.PATHEXT = oldPathext;
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);

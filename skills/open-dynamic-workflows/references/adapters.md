@@ -82,7 +82,7 @@ did-you-mean hint) instead of silently ignoring them.
 
 | Key | Meaning |
 | --- | --- |
-| `defaultAdapter` | adapter used when a call does not name one. Unset: the sole configured adapter, or — on a fresh install — the sole adapter whose CLI is actually on PATH |
+| `defaultAdapter` | adapter used when a call does not name one. Unset: the sole configured adapter, or — on a fresh install — the sole adapter whose CLI can run: it is on PATH, and on Windows `odw` can launch it |
 | `concurrency` | max agent CLIs running at once; omit for auto (`min(16, cpus-2)`) |
 | `maxAgents` | hard cap on total dispatches per run (runaway guard) |
 | `timeout` | per-agent CLI timeout in seconds |
@@ -118,3 +118,54 @@ Expanded in `command` and `stdin` before each call:
 A CLI fits as long as it reads a prompt (via stdin or an argument) and prints its
 reply to stdout. Non-zero exit, a timeout, or a missing executable surface as a
 failed agent call.
+
+### Windows launchers
+
+On Windows, `odw` resolves the first `command` token with `PATH` and `PATHEXT`.
+It reads them from the environment that the CLI gets: the process environment
+with the adapter's `env` on top. So an `env.PATH` in the adapter changes where
+`odw` looks, and `odw init` looks in the same place. `odw` reads both names in
+any letter case, as Windows does. It starts the result without a shell. The
+result decides what happens:
+
+- A native `.exe` or `.com` file runs directly.
+- An npm shim that starts Node runs as `node <script>`. An npm shim is a `.cmd`
+  file that `npm install -g` creates. `odw` accepts a file as an npm shim only
+  when its extension is `.cmd`, in any letter case, and its whole text is one
+  that npm writes. A file that does more, for example one that sets
+  `NODE_PATH`, is not an npm shim. `odw` runs the `node.exe` next to the shim,
+  or else the `node.exe` on `PATH`. Arguments and stdin arrive unchanged.
+- Any other `.cmd` launcher fails with exit code 127. This includes an npm shim
+  that starts a program other than Node. A `.bat` file also fails, whatever its
+  text, because npm does not write `.bat` shims. The error names the file. Set
+  `command` to the real executable or to an explicit interpreter.
+- Any other file fails with exit code 127. This includes a script, such as a
+  `.ps1` or `.js` file, and a file with no extension. Windows cannot start a
+  script directly. Set `command` to an interpreter and the script, for example
+  `["node", "agent.js"]`.
+
+A launcher or script that `odw` cannot run counts as not installed. `odw init`
+shows the reason in its table. The zero-config default never picks an adapter
+with such a launcher or script.
+
+Cursor's Windows launcher, `agent.cmd`, runs a PowerShell script. `odw` cannot
+run it as it is. Call PowerShell yourself. This override mirrors Cursor's own
+`agent.cmd`:
+
+```json
+{
+  "adapters": {
+    "cursor": {
+      "command": ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                  "C:\\Users\\<you>\\AppData\\Local\\cursor-agent\\cursor-agent.ps1",
+                  "--print", "--force", "--trust", "--output-format", "text", "--workspace", "{workspace}"],
+      "stdin": "{prompt}",
+      "flags": { "model": ["--model"] }
+    }
+  }
+}
+```
+
+Windows PowerShell 5.1 drops embedded `"` characters and empty arguments when a
+script passes them to a program. The prompt goes on stdin, so this limit does
+not affect the prompt.

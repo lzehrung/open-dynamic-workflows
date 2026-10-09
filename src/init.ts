@@ -3,7 +3,7 @@
  *
  * Doctor and setup in one idempotent verb:
  *
- *   - always prints the adapter table (installed on PATH? default? permissions)
+ *   - always prints the adapter table (can its CLI run? default? permissions)
  *   - `--adapter <name>` persists a default without prompting — the path for
  *     agents, after asking their user which CLI to default to
  *   - at a real keyboard (and not `--check`) it offers a numbered pick
@@ -27,6 +27,7 @@ import {
   writeDefaultAdapter,
   type AdapterListing,
 } from "./adapters/config.js";
+import { WINDOWS_LAUNCHERS_DOC } from "./adapters/executable.js";
 import type { Config } from "./adapters/types.js";
 import { envTruthy } from "./runtime/live-view.js";
 import { detectCaps, glyphs, palette, type Glyphs, type Palette } from "./tty.js";
@@ -80,9 +81,11 @@ export async function cmdInit(flags: InitFlags, io?: Partial<InitIO>): Promise<n
       return 2;
     }
     if (!known.installed) {
+      const others = installed.length ? ` (${installed.map((r) => r.name).join(", ")})` : "";
       err.write(
-        `odw init: '${flags.adapter}' is not on PATH — install it first, or pick an installed one` +
-          `${installed.length ? ` (${installed.map((r) => r.name).join(", ")})` : ""}\n`,
+        known.launchProblem !== undefined
+          ? `odw init: '${flags.adapter}' cannot run: ${known.launchProblem} — see ${WINDOWS_LAUNCHERS_DOC}, or pick an installed one${others}\n`
+          : `odw init: '${flags.adapter}' is not on PATH — install it first, or pick an installed one${others}\n`,
       );
       return 1;
     }
@@ -93,12 +96,16 @@ export async function cmdInit(flags: InitFlags, io?: Partial<InitIO>): Promise<n
   if (resolved) {
     // resolveAdapter honours an explicit default without checking PATH (the
     // spawn would fail with its own error) — but a doctor saying "no setup
-    // needed" about a CLI that isn't there would be a false all-clear.
+    // needed" about a CLI that can't run would be a false all-clear.
     const row = rows.find((r) => r.name === resolved);
     if (row && !row.installed) {
+      const repick = installed.length ? `: odw init --adapter ${installed[0]!.name}` : " after installing one";
       err.write(
-        `${p.err(g.fail)} defaultAdapter "${resolved}" is set but its CLI is not on PATH — ` +
-          `install it, or re-pick${installed.length ? `: odw init --adapter ${installed[0]!.name}` : " after installing one"}\n`,
+        row.launchProblem !== undefined
+          ? `${p.err(g.fail)} defaultAdapter "${resolved}" is set but odw cannot run its CLI: ${row.launchProblem} — ` +
+              `see ${WINDOWS_LAUNCHERS_DOC}, or re-pick${repick}\n`
+          : `${p.err(g.fail)} defaultAdapter "${resolved}" is set but its CLI is not on PATH — ` +
+              `install it, or re-pick${repick}\n`,
       );
       if (installed.length > 0 && interactive(flags, input, err, env)) {
         return promptAndPersist(installed, flags.config ?? null, input, err, p, g);
@@ -110,9 +117,13 @@ export async function cmdInit(flags: InitFlags, io?: Partial<InitIO>): Promise<n
   }
 
   if (installed.length === 0) {
+    const blocked = rows.filter((r) => r.launchProblem !== undefined).map((r) => r.name);
     err.write(
-      `${p.err(g.fail)} no agent CLI found on PATH — install one of the above first ` +
-        `(e.g. claude or codex), then re-run 'odw init'\n`,
+      blocked.length > 0
+        ? `${p.err(g.fail)} no agent CLI can run — odw cannot launch ${blocked.join(", ")} (see above); ` +
+            `install another one (e.g. claude or codex), or fix the launcher, then re-run 'odw init'\n`
+        : `${p.err(g.fail)} no agent CLI found on PATH — install one of the above first ` +
+            `(e.g. claude or codex), then re-run 'odw init'\n`,
     );
     return 1;
   }
@@ -142,7 +153,7 @@ function writeTable(
   const labelW = Math.max(...rows.map((r) => r.label.length));
   for (const r of rows) {
     const mark = r.installed ? p.ok(g.ok) : p.dim(g.fail);
-    const note = r.installed ? p.dim(r.permissionNote) : p.dim("not installed");
+    const note = r.installed ? p.dim(r.permissionNote) : p.dim(r.launchProblem ?? "not installed");
     const def = r.isDefault ? p.accent("  (default)") : "";
     err.write(`  ${mark} ${r.name.padEnd(nameW)}  ${r.label.padEnd(labelW)}  ${note}${def}\n`);
   }
