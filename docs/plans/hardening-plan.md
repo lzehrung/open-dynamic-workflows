@@ -47,9 +47,9 @@ Verified against `main` at `aa1b3d5` (fork plus upstream `16f57ee`).
 - On POSIX, run and chat files use the default umask. Other local users can often read them.
 - The server body limit counts characters, not bytes.
 - `odw serve --host <non-loopback>` exposes runs, workflow sources, and chat transcripts without
-  authentication. It prints no warning.
-- User docs say that built-in `omp` runs with `--no-tools`. It runs with tools and
-  `--approval-mode yolo`.
+  authentication. Its warning does not say this or that writes are refused.
+- The adapters reference calls `{workspace}` an isolated copy and counts five built-ins. There is no
+  copy mode, and there are nine built-ins.
 
 ### Windows and cross-platform
 
@@ -69,8 +69,46 @@ Verified against `main` at `aa1b3d5` (fork plus upstream `16f57ee`).
 - CI runs only on Linux and only on Node 24. `engines.node` is `>=20`.
 - On Windows, `npm test` fails one test with `EBUSY`. The detached worker keeps the source
   directory as its working directory for a short time after the run settles.
+- On Windows, an atomic JSON write fails with `EPERM` while another process reads the file. In a
+  probe, 783 of 3,000 `status.json` writes failed while one reader polled.
+- `scripts/version-info.mjs` compares paths with the JavaScript `realpathSync`, which does not expand
+  8.3 short names. Under a short temp path (GitHub's `RUNNER~1`), two version tests fail.
 
 ---
+
+## Status
+
+All seven items are implemented as one commit each and reviewed with `review-and-correct` until
+clean. `hardening/integration` holds all seven on top of `upstream/main`.
+
+Verification of `hardening/integration`:
+
+- Fork CI passes on Linux (Node 20 and 24), Windows, and macOS.
+- Local suite: Windows 377 pass, Linux (WSL) 388 pass, 0 failures.
+- CLI smoke on Windows: an allowlisted adapter started a bare `node` command, and `odw stop` ended
+  the running agent in under 1 s.
+
+| Item | Branch | Review |
+| --- | --- | --- |
+| 1. Cross-platform CI | `hardening/1-ci` | clean; 2 minor findings open |
+| 2. Windows launch fidelity | `hardening/2-windows-launch` | clean; 1 minor finding open |
+| 3. Process control | `hardening/3-process-control` | clean |
+| 4. Environment policy | `hardening/4-env-policy` | clean |
+| 5. Private run data | `hardening/5-private-run-data` | clean |
+| 6. Server | `hardening/6-server` | clean |
+| 7. Security docs | `hardening/7-security-docs` | clean after 1 fix round |
+
+- Items 1, 2, 3, 5, 6, and 7 are based on `upstream/main` and are independent.
+- Item 4 is based on the integration of the other six. Send its PR after they merge.
+- Without item 1, the Windows `EBUSY` test can still fail on the other branches.
+
+Open minor findings:
+
+- Item 1: on Windows, the retried rename can block the dashboard server for up to about 1 s while a
+  chat write waits for a reader.
+- Item 1: the new `waitFor` test reproduces the old race only rarely. The `cli-runs` rerun test
+  reproduces it reliably.
+- Item 2: an unreadable `.cmd` file gets the generic "cannot run" error, not the I/O error.
 
 ## Work
 
@@ -87,10 +125,15 @@ Change:
 - Add one Linux job on the minimum Node version in `engines.node`.
 - Make `waitFor` return only after the worker process exits, with a short upper limit. Then a
   caller can delete the source directory on Windows.
+- On Windows, retry an atomic JSON rename for a short, bounded time when it fails with `EPERM`,
+  `EACCES`, or `EBUSY`.
+- Compare build paths with `realpathSync.native`, which expands 8.3 short names.
 
 Test:
 
 - The `EBUSY` test passes on Windows without retries.
+- On Windows, status writes succeed while another process reads `status.json`.
+- The version tests pass when `TEMP` is an 8.3 short path.
 
 ### 2. Windows launch fidelity
 
@@ -191,11 +234,10 @@ Test:
 Change:
 
 - Add a short Security section to `README.md` and `README.zh-CN.md`. Cover the trust model, the
-  ownership table, `envPolicy`, worktrees as edit isolation only, prompts in argv for Gemini and
-  Qwen, and non-loopback read exposure.
-- Fix false claims:
-  - built-in `omp` with `--no-tools` (`SKILL.md` and both `adapters.md` files);
-  - `{workspace}` as an isolated copy (both `adapters.md` files).
+  ownership table, environment inheritance (item 4 adds `envPolicy`), worktrees as edit isolation
+  only, prompts in argv for Gemini and Qwen, sensitive run data, and non-loopback read exposure.
+- Correct the adapters reference: `{workspace}` is the source or a temporary worktree, and there
+  are nine built-ins. List the permission flags of each built-in.
 - Label `permissionNote()` output as declared by flags, not verified.
 - Add an exact expected command vector for each of the nine built-ins. This guards their permission
   flags.
