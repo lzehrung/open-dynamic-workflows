@@ -393,6 +393,15 @@ Only an `.exe` or `.com` file, and a `.cmd` npm shim for Node, can launch. A
 `.cmd` or `.bat` launcher that is not an npm shim — Cursor's `agent.cmd`, for
 example — fails with exit code 127 and an error that names the fix.
 
+By default, every agent CLI and the Chat Host's Codex inherit the full
+environment of the `odw` process. `envPolicy` changes this:
+`{ "mode": "inherit", "deny": [...] }` removes the named variables, and
+`{ "mode": "allowlist", "allow": [...] }` passes only the named ones. A top-level
+`envPolicy` applies to every adapter; an adapter's own `envPolicy` replaces it.
+Adapter `env` values apply after the policy. Filtering does not protect
+credential files that the CLI can read. See
+[Environment policy](skills/open-dynamic-workflows/references/adapters.md#environment-policy).
+
 Config keys live at the **top level** — there is no `"settings"` wrapper, and odw
 warns about unknown or misplaced keys (with a did-you-mean hint) instead of
 silently ignoring them. With no `defaultAdapter` set, odw uses the sole

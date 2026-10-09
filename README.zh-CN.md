@@ -365,6 +365,13 @@ Windows 下的可执行文件探测遵循 `PATH` 和 `PATHEXT`。只有 `.exe`�
 `.cmd` 或 `.bat` 启动器(例如 Cursor 的 `agent.cmd`)以退出码 127 失败,错误信息
 会说明如何修复。
 
+默认情况下,每个 agent CLI 和 Chat Host 的 Codex 都继承 `odw` 进程的完整环境变量。
+`envPolicy` 可以改变这一点:`{ "mode": "inherit", "deny": [...] }` 删除指定的变量,
+`{ "mode": "allowlist", "allow": [...] }` 只传递指定的变量。顶层的 `envPolicy` 适用于
+所有 adapter;adapter 自己的 `envPolicy` 会替换它。adapter 的 `env` 值在策略之后生效。
+过滤不能保护 CLI 可以读取的凭据文件。见
+[环境策略](skills/open-dynamic-workflows/zh-CN/references/adapters.md#环境策略)。
+
 配置键全部放在**顶层**——没有 `"settings"` 包装层;odw 会对未知或放错位置的键
 在 stderr 上给出警告(附 did-you-mean 提示),而不是静默忽略。没设
 `defaultAdapter` 时,odw 会用唯一配置的 adapter——或在全新安装下,用 PATH 上

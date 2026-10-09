@@ -10,13 +10,14 @@
  * explains how to tune them rather than baking opinions in here.
  */
 
-import type { AdapterFlags, AdapterOutput, Settings } from "./types.js";
+import type { AdapterFlags, AdapterOutput, EnvPolicy, Settings } from "./types.js";
 
 /** A built-in adapter spec — same shape as a config entry, minus its name. */
 export interface RawAdapter {
   command: string[];
   stdin?: string;
   env?: Record<string, string>;
+  envPolicy?: EnvPolicy;
   timeout?: number;
   label?: string;
   flags?: AdapterFlags;
@@ -132,8 +133,8 @@ export const BUILTIN_ADAPTERS: Record<string, RawAdapter> = {
   },
 };
 
-/** Defaults for run-wide settings; any config value overrides these. */
-export const DEFAULT_SETTINGS: Settings = {
+/** Defaults for run-wide settings: every field is filled. Any config value overrides these. */
+export const DEFAULT_SETTINGS: Required<Settings> = {
   defaultAdapter: null, // falls back to the sole adapter, or must be chosen
   concurrency: null, // null => auto (min(16, cpus - 2))
   maxAgents: 1000, // runaway guard on total dispatches per run
@@ -143,4 +144,5 @@ export const DEFAULT_SETTINGS: Settings = {
   workflowsRoot: null, // null => ~/.odw/workflows
   claudeWorkflowsRoot: null, // null => ~/.claude/workflows, honoring CLAUDE_CONFIG_DIR
   claudeJobsScope: "all", // observe every project's Claude runs; "project" narrows to the served repo + worktrees
+  envPolicy: { mode: "inherit" }, // every agent CLI and Chat Host's Codex get the full environment of odw
 };
