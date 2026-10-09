@@ -95,7 +95,7 @@ did-you-mean hint) instead of silently ignoring them.
 
 | Key | Meaning |
 | --- | --- |
-| `defaultAdapter` | adapter used when a call does not name one. Unset: the sole configured adapter, or — on a fresh install — the sole adapter whose CLI is actually on PATH |
+| `defaultAdapter` | adapter used when a call does not name one. Unset: the sole configured adapter, or — on a fresh install — the sole adapter whose CLI odw finds and can launch |
 | `concurrency` | max agent CLIs running at once; omit for auto (`min(16, cpus-2)`) |
 | `maxAgents` | hard cap on total dispatches per run (runaway guard) |
 | `timeout` | per-agent CLI timeout in seconds |
@@ -131,3 +131,41 @@ Expanded in `command` and `stdin` before each call:
 A CLI fits as long as it reads a prompt (via stdin or an argument) and prints its
 reply to stdout. Non-zero exit, a timeout, or a missing executable surface as a
 failed agent call.
+
+### Windows launchers
+
+`odw` starts the first `command` token without a shell, so arguments and stdin
+arrive unchanged. It finds the token with `PATH` and `PATHEXT` from the
+environment that the CLI gets, so an adapter `env.PATH` counts.
+
+- An `.exe` or `.com` file runs directly.
+- An npm shim, the `.cmd` file that `npm install -g` writes for a Node CLI,
+  runs as `node <script>`. odw uses the `node.exe` next to the shim, else the
+  one on `PATH`. A `.cmd` file is a shim only when its whole text is one that
+  npm writes.
+- Anything else fails with exit code 127: other `.cmd` and `.bat` launchers,
+  scripts such as `.ps1` or `.js`, and files with no extension. Set
+  `command` to the real executable, or to an interpreter and the script, for
+  example `["node", "agent.js"]`.
+
+`odw init` and the zero-config default treat such a command as not installed,
+and `odw init` shows the reason.
+
+Cursor's `agent.cmd` starts a PowerShell script. Call PowerShell yourself:
+
+```json
+{
+  "adapters": {
+    "cursor": {
+      "command": ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                  "C:\\Users\\<you>\\AppData\\Local\\cursor-agent\\cursor-agent.ps1",
+                  "--print", "--force", "--trust", "--output-format", "text", "--workspace", "{workspace}"],
+      "stdin": "{prompt}",
+      "flags": { "model": ["--model"] }
+    }
+  }
+}
+```
+
+Windows PowerShell 5.1 drops `"` characters and empty arguments that it passes
+to a program. The prompt goes on stdin, so it is not affected.

@@ -432,14 +432,16 @@ the event and final-text path explicitly:
 ```
 
 ODW keeps raw stdout/stderr in run diagnostics while returning only the decoded
-final response. On Windows, executable discovery follows `PATHEXT`, so normal
-`agent.cmd`, `kilo.cmd`, and `omp.exe` shims are detected without full paths.
+final response. On Windows, odw finds a command with `PATH` and `PATHEXT` and
+starts only an `.exe`, a `.com`, or an npm `.cmd` shim. Other launchers, such
+as Cursor's `agent.cmd`, fail with exit code 127 and an error that says what to
+do. See [Windows launchers](skills/open-dynamic-workflows/references/adapters.md#windows-launchers).
 
 Config keys live at the **top level** — there is no `"settings"` wrapper, and odw
 warns about unknown or misplaced keys (with a did-you-mean hint) instead of
 silently ignoring them. With no `defaultAdapter` set, odw uses the sole
 configured adapter — or, on a fresh install, the sole adapter whose CLI it
-actually finds on PATH; if several are installed, the error lists them and shows
+finds and can launch on PATH; if several are installed, the error lists them and shows
 how to pick one.
 
 ## How it works
