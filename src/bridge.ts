@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { resolveAdapter } from "./adapters/config.js";
+import { adapterLaunchEnv } from "./adapters/executable.js";
 import { expand, expandAll, type PlaceholderContext } from "./adapters/placeholders.js";
 import { decodeAdapterOutput } from "./adapters/output.js";
 import { runCommand, type CommandRunner } from "./adapters/runner.js";
@@ -178,9 +179,8 @@ export class Bridge {
         };
         const command = [...expandAll(adapter.command, context), ...plan.extraArgs];
         const stdin = adapter.stdin ? expand(adapter.stdin, context) : undefined;
-        const env = adapter.env
-          ? ({ ...process.env, ...adapter.env } as Record<string, string>)
-          : undefined;
+        // `listAdapters` checks that the CLI can run with this same environment.
+        const env = adapterLaunchEnv(adapter);
         const cli = await this.runner(command, { stdin, cwd: ws.path, env, timeout });
         const diff = await ws.diff();
         return { cli, diff };

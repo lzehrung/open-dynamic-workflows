@@ -360,13 +360,15 @@ Codex、Claude Code、Gemini、Qwen、Kimi、Oh My Pi、Kilo Code、OpenCode、C
 ```
 
 ODW 在运行诊断中保留原始 stdout/stderr,但只把解码后的最终响应交给 workflow。
-Windows 下的可执行文件探测遵循 `PATHEXT`,所以 `agent.cmd`、`kilo.cmd`、`omp.exe`
-这类普通 shim 无需写完整路径也能识别。
+Windows 下的可执行文件探测遵循 `PATH` 和 `PATHEXT`。只有 `.exe`、`.com` 文件,
+以及 npm 写出的 `.cmd` shim(为 Node 脚本生成),才能启动。不是 npm shim 的
+`.cmd` 或 `.bat` 启动器(例如 Cursor 的 `agent.cmd`)以退出码 127 失败,错误信息
+会说明如何修复。
 
 配置键全部放在**顶层**——没有 `"settings"` 包装层;odw 会对未知或放错位置的键
 在 stderr 上给出警告(附 did-you-mean 提示),而不是静默忽略。没设
 `defaultAdapter` 时,odw 会用唯一配置的 adapter——或在全新安装下,用 PATH 上
-唯一真实存在的那个 CLI;若装了多个,报错会列出它们并告诉你如何选择。
+唯一能找到并能启动的那个 CLI;若装了多个,报错会列出它们并告诉你如何选择。
 
 ## 工作原理
 
