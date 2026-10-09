@@ -41,6 +41,13 @@ export interface Workspace {
   source: string;
   /** Unified diff of the agent's changes (empty for inplace). */
   diff(): Promise<string>;
+  /**
+   * Keep the worktree after the call instead of removing it, and return its
+   * root path (null when there is no worktree to keep). Call this when a
+   * leftover process may still use the tree: deleting it would pull files out
+   * from under that process and hide what it did.
+   */
+  retain(): string | null;
 }
 
 /** Everything the runner captures from git directly is small; diffs go to a file. */
@@ -93,7 +100,7 @@ export async function withWorkspace<T>(
   fn: (workspace: Workspace) => Promise<T>,
 ): Promise<T> {
   if (mode === "inplace") {
-    return fn({ path: source, source, diff: async () => "" });
+    return fn({ path: source, source, diff: async () => "", retain: () => null });
   }
   if (mode !== "worktree") {
     throw new Error(`unknown workspace mode '${mode}'; use 'inplace' or 'worktree'`);
@@ -134,9 +141,14 @@ export async function withWorkspace<T>(
   const rel = relative(await realpath(top), await realpath(resolve(source)));
   const wsPath = rel === "" || rel.startsWith("..") ? work : join(work, rel);
 
+  let retained = false;
   const ws: Workspace = {
     path: wsPath,
     source,
+    retain: () => {
+      retained = true;
+      return work;
+    },
     diff: async () => {
       // Intent-to-add stages the *paths* of brand-new files (respecting
       // .gitignore) so they appear in the diff; diffing against the pinned
@@ -151,16 +163,18 @@ export async function withWorkspace<T>(
   try {
     return await fn(ws);
   } finally {
-    // An agent may have locked its worktree; unlock (best-effort), then
-    // remove with double --force (dirty AND locked); if git still refuses,
-    // delete the tree and prune the stale registration.
-    await git(top, ["worktree", "unlock", work]).catch(() => {});
-    try {
-      await git(top, ["worktree", "remove", "--force", "--force", work]);
-    } catch {
+    if (!retained) {
+      // An agent may have locked its worktree; unlock (best-effort), then
+      // remove with double --force (dirty AND locked); if git still refuses,
+      // delete the tree and prune the stale registration.
+      await git(top, ["worktree", "unlock", work]).catch(() => {});
+      try {
+        await git(top, ["worktree", "remove", "--force", "--force", work]);
+      } catch {
+        await rm(tmp, { recursive: true, force: true }).catch(() => {});
+        await git(top, ["worktree", "prune"]).catch(() => {});
+      }
       await rm(tmp, { recursive: true, force: true }).catch(() => {});
-      await git(top, ["worktree", "prune"]).catch(() => {});
     }
-    await rm(tmp, { recursive: true, force: true }).catch(() => {});
   }
 }

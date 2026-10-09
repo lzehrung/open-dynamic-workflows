@@ -46,7 +46,15 @@ export class AgentLimitExceeded extends DynamicWorkflowError {}
 export class BudgetExhausted extends DynamicWorkflowError {}
 
 /** A stop was requested; the run unwinds at the next safe point. */
-export class RunStopped extends DynamicWorkflowError {}
+export class RunStopped extends DynamicWorkflowError {
+  /** Set when a cancelled call could not verify that its process tree is gone. */
+  readonly treeCleanup?: "unverified";
+
+  constructor(message: string, treeCleanup?: "unverified") {
+    super(message);
+    this.treeCleanup = treeCleanup;
+  }
+}
 
 /** The workflow script is malformed (bad `meta`, syntax error, no result). */
 export class WorkflowScriptError extends DynamicWorkflowError {}
