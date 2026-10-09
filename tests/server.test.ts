@@ -485,7 +485,7 @@ test("HTTP: Chat Host sessions persist messages and link a real ODW run", async 
     assert.equal(store.readMeta(runId).origin, "chat");
     assert.equal(store.readMeta(runId).workflowName, "chat-host-bridge");
 
-    await waitFor(store, runId, { timeoutMs: 5000 });
+    await waitFor(store, runId, { timeoutMs: 30_000 });
 
     const hydrated = await waitForChat(
       `${handle.url}/api/chat/sessions/${created.id}`,

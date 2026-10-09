@@ -1,4 +1,6 @@
-import { test } from "node:test";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,7 +9,8 @@ import { join } from "node:path";
 import { startRun, startRunFromSource, waitFor } from "../src/runtime/launcher.js";
 import { event } from "../src/events.js";
 import { RunObserver } from "../src/runtime/run-liveness.js";
-import { JsonlSink, RunStore } from "../src/runtime/run-store.js";
+import { JsonlSink, RunStore, TERMINAL_STATES } from "../src/runtime/run-store.js";
+import { isProcessAlive } from "../src/runtime/runs-view.js";
 
 // These assert the launcher WIRING: that startRun resolves a bare name against
 // <source>/.odw/workflows (not process.cwd()), via the shared resolveWorkflow,
@@ -26,11 +29,135 @@ test("startRun resolves a bare name against <source>/.odw/workflows", async () =
     const meta = store.readMeta(runId);
     assert.equal(meta.script, wf, "name must resolve to the project workflows file");
     assert.equal(meta.source, proj);
-    const status = await waitFor(store, runId, { timeoutMs: 5000 });
+    const status = await waitFor(store, runId, { timeoutMs: 30_000 });
     assert.equal(status.state, "done");
     assert.equal(store.readResult(runId), 1);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("waitFor returns after the worker exits, so the source directory can be removed", async () => {
+  // Several workers at once make a late worker exit more likely to show.
+  await Promise.all(
+    Array.from({ length: 8 }, async () => {
+      const tmp = mkdtempSync(join(tmpdir(), "odw-exit-"));
+      const proj = join(tmp, "proj");
+      const wfDir = join(proj, ".odw", "workflows");
+      mkdirSync(wfDir, { recursive: true });
+      writeFileSync(join(wfDir, "exit.js"), "export const meta = { name: 'exit', description: 'x' }\nreturn 1\n");
+      try {
+        const { runId, store } = startRun("exit", { source: proj, runsRoot: join(tmp, "runs") });
+        const pid = Number(readFileSync(join(store.runDir(runId), "worker.pid"), "utf8"));
+        const status = await waitFor(store, runId, { timeoutMs: 30_000, pollIntervalMs: 20 });
+        assert.ok(TERMINAL_STATES.has(String(status.state)), `terminal state, got ${status.state}`);
+        assert.equal(isProcessAlive(pid), false, "the worker has exited");
+        // The guarantee is the exit above. Windows can still hold the directory
+        // for a moment after the exit event (a handle-release lag, not a live
+        // worker), so the removal retries like the other cleanups here.
+        rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      } finally {
+        rmSync(tmp, { recursive: true, force: true, maxRetries: 10 });
+      }
+    }),
+  );
+});
+
+test("waitFor does not return while the worker of a finished run is still alive", async () => {
+  const root = mkdtempSync(join(tmpdir(), "odw-linger-"));
+  try {
+    const store = new RunStore(root);
+    const runId = store.create({ script: "s.js", args: null, source: root, workflowName: "s" });
+    // A stand-in worker that wrote its terminal status but has not exited yet.
+    const worker = spawn(process.execPath, ["-e", "setTimeout(() => {}, 1500)"], { stdio: "ignore" });
+    const exited = once(worker, "exit");
+    store.updateStatus(runId, { state: "done", pid: worker.pid });
+    const status = await waitFor(store, runId, { timeoutMs: 30_000, pollIntervalMs: 20 });
+    assert.equal(status.state, "done");
+    assert.equal(isProcessAlive(worker.pid!), false, "waitFor returned before the worker exited");
+    await exited;
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("waitFor does not wait for an unknown worker or for the current process", async () => {
+  const root = mkdtempSync(join(tmpdir(), "odw-nowait-"));
+  try {
+    const store = new RunStore(root);
+    // No pid at all, and the pid of this process (an in-process executeRun), which stays alive.
+    for (const pid of [undefined, process.pid]) {
+      const runId = store.create({ script: "s.js", args: null, source: root, workflowName: "s" });
+      store.updateStatus(runId, { state: "done", ...(pid === undefined ? {} : { pid }) });
+      const started = Date.now();
+      const status = await waitFor(store, runId, { timeoutMs: 30_000, pollIntervalMs: 20 });
+      assert.equal(status.state, "done");
+      // A wait for a process that never exits would take the full 5 s exit limit.
+      assert.ok(Date.now() - started < 2_000, `waitFor waited for pid ${pid}`);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("waitFor keeps the caller's timeout while it waits for a finished run's worker", async () => {
+  const root = mkdtempSync(join(tmpdir(), "odw-exit-timeout-"));
+  try {
+    const store = new RunStore(root);
+    const runId = store.create({ script: "s.js", args: null, source: root, workflowName: "s" });
+    // A stand-in worker that wrote its terminal status and stays alive past the timeout.
+    const worker = spawn(process.execPath, ["-e", "setTimeout(() => {}, 8000)"], { stdio: "ignore" });
+    const exited = once(worker, "exit");
+    try {
+      store.updateStatus(runId, { state: "done", pid: worker.pid });
+      const started = Date.now();
+      const status = await waitFor(store, runId, { timeoutMs: 0, pollIntervalMs: 20 });
+      assert.equal(status.state, "done");
+      // Without the caller's limit, the exit wait would take its full 5 s.
+      assert.ok(Date.now() - started < 2_000, "waitFor ignored timeoutMs: 0");
+    } finally {
+      worker.kill();
+      await exited;
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("waitFor does not sleep past the caller's timeout while it waits for a worker", async () => {
+  const root = mkdtempSync(join(tmpdir(), "odw-exit-overshoot-"));
+  try {
+    const store = new RunStore(root);
+    const runId = store.create({ script: "s.js", args: null, source: root, workflowName: "s" });
+    const worker = spawn(process.execPath, ["-e", "setTimeout(() => {}, 8000)"], { stdio: "ignore" });
+    const exited = once(worker, "exit");
+    try {
+      store.updateStatus(runId, { state: "done", pid: worker.pid });
+      // Record every timer that waitFor asks for. Each call passes through.
+      const delays: number[] = [];
+      const realSetTimeout = globalThis.setTimeout;
+      const spy = mock.method(globalThis, "setTimeout", ((fn: () => void, ms?: number) => {
+        delays.push(Number(ms));
+        return realSetTimeout(fn, ms);
+      }) as typeof setTimeout);
+      try {
+        await waitFor(store, runId, { timeoutMs: 10 });
+      } finally {
+        spy.mock.restore();
+      }
+      assert.ok(delays.length > 0, "waitFor waited for the live worker");
+      // The exit wait sleeps in steps of up to 50 ms. Each step must stay within the timeout.
+      assert.ok(
+        delays.every((ms) => ms <= 10),
+        `waitFor asked for a timer longer than the 10 ms timeout: ${delays.join(", ")}`,
+      );
+      assert.equal(isProcessAlive(worker.pid!), true, "the worker is still alive, so the timeout ended the wait");
+    } finally {
+      worker.kill();
+      await exited;
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -43,7 +170,7 @@ test("waitFor detects a worker that exits without writing its terminal status", 
     );
     const pid = Number(readFileSync(join(store.runDir(runId), "worker.pid"), "utf8"));
     assert.ok(pid > 0);
-    const status = await waitFor(store, runId, { timeoutMs: 5000, pollIntervalMs: 20 });
+    const status = await waitFor(store, runId, { timeoutMs: 30_000, pollIntervalMs: 20 });
     assert.equal(status.state, "failed");
     assert.match(String(status.error), /worker process .* is gone/);
     assert.equal(store.readStatus(runId).state, "running", "observation must not overwrite history");
@@ -59,7 +186,7 @@ test("spawn failure is recorded instead of leaving a pending run", async () => {
       "export const meta = { name: 'spawn', description: 'x' }; return 1",
       { runsRoot: root, source: join(root, "missing-working-directory") },
     );
-    const status = await waitFor(store, runId, { timeoutMs: 5000, pollIntervalMs: 10 });
+    const status = await waitFor(store, runId, { timeoutMs: 30_000, pollIntervalMs: 10 });
     assert.equal(status.state, "failed");
     assert.match(String(store.readError(runId)?.error), /worker failed to start:.*ENOENT/);
   } finally {

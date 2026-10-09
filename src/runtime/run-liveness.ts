@@ -50,7 +50,7 @@ export class RunObserver {
     drain();
     let status = this.store.readStatus(this.runId);
     let state = String(status.state ?? "");
-    const pid = this.workerPid(status);
+    const pid = workerPid(this.store, this.runId, status);
     const dead = pid !== null && this.isAlive(pid) === false;
     // The worker can finish between the event read and the process probe.
     // Once it is gone, reread its final writes before declaring a crash.
@@ -96,18 +96,23 @@ export class RunObserver {
     }
     return { status, events, terminal: false, error };
   }
+}
 
-  private workerPid(status: Record<string, unknown>): number | null {
-    let pid = status.pid;
-    if (!validPid(pid)) {
-      try {
-        pid = Number(readFileSync(join(this.store.runDir(this.runId), "worker.pid"), "utf8"));
-      } catch {
-        return null;
-      }
+/** The run's worker pid: the status `pid`, else the write-once `worker.pid` file. */
+export function workerPid(
+  store: RunStore,
+  runId: string,
+  status: Record<string, unknown>,
+): number | null {
+  let pid = status.pid;
+  if (!validPid(pid)) {
+    try {
+      pid = Number(readFileSync(join(store.runDir(runId), "worker.pid"), "utf8"));
+    } catch {
+      return null;
     }
-    return validPid(pid) ? pid : null;
   }
+  return validPid(pid) ? pid : null;
 }
 
 function validPid(pid: unknown): pid is number {
