@@ -1,6 +1,8 @@
-import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { assertOwnedDir, ensurePrivateDir, PRIVATE_FILE_MODE } from "./run-store.js";
+
+import { replaceFile } from "./replace-file.js";
 
 export type ChatRole = "user" | "assistant" | "tool";
 export type ChatSessionState = "running" | "idle" | "done";
@@ -290,6 +292,6 @@ export class ChatStore {
     // `mode` applies to a new file only, so remove a temp file left by a crash.
     rmSync(tmp, { force: true });
     writeFileSync(tmp, JSON.stringify(data, null, 2), { encoding: "utf8", mode: PRIVATE_FILE_MODE });
-    renameSync(tmp, this.file);
+    replaceFile(tmp, this.file);
   }
 }

@@ -25,7 +25,8 @@ export function buildVersion(root, releaseTag = "") {
   let dirty = false;
   try {
     // A source archive inside another checkout must not inherit that checkout's identity.
-    if (realpathSync(git("rev-parse", "--show-toplevel")) === realpathSync(root)) {
+    // The native realpath expands Windows 8.3 short names (RUNNER~1), as Git does.
+    if (realpathSync.native(git("rev-parse", "--show-toplevel")) === realpathSync.native(root)) {
       revision = git("rev-parse", "--short=12", "HEAD");
       dirty = git("status", "--porcelain", "--untracked-files=normal") !== "";
     }

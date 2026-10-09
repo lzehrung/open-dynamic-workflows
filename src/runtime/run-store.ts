@@ -38,12 +38,12 @@ import {
   readdirSync,
   readFileSync,
   readSync,
-  renameSync,
   writeFileSync,
 } from "node:fs";
 import { basename, join } from "node:path";
 
 import type { EventSink, WorkflowEvent } from "../events.js";
+import { replaceFile } from "./replace-file.js";
 
 /** Terminal states: a run in one of these will not change again. */
 export const TERMINAL_STATES = new Set(["done", "failed", "stopped"]);
@@ -477,7 +477,7 @@ function newRunId(): string {
 function writeJson(path: string, payload: unknown): void {
   const tmp = `${path}.${process.pid}.${Math.floor(Math.random() * 1e9).toString(36)}.tmp`;
   writeFileSync(tmp, JSON.stringify(payload, null, 2), { encoding: "utf8", mode: PRIVATE_FILE_MODE });
-  renameSync(tmp, path);
+  replaceFile(tmp, path);
 }
 
 function readJson(path: string): Record<string, unknown> | null {
