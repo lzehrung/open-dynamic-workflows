@@ -55,13 +55,15 @@ export interface BuildContextOptions {
   sink?: EventSink;
   control?: Control;
   budgetTotal?: number | null;
+  /** Aborting ends in-flight agent processes; each pending `agent()` then throws `RunStopped`. */
+  signal?: AbortSignal;
 }
 
 /** Wire a full run context from a config and the run's surroundings. */
 export function buildContext(config: Config, options: BuildContextOptions = {}): RunContext {
   const sink = options.sink ?? new NullSink();
   const control = options.control ?? new NullControl();
-  const bridge = new Bridge(config, { source: options.source });
+  const bridge = new Bridge(config, { source: options.source, signal: options.signal });
   const budgetTotal = options.budgetTotal ?? null;
   // The shared tally `budget.spent()` reads. Estimated (chars/4 of agent
   // replies); the guard makes --budget a real ceiling, not advisory.

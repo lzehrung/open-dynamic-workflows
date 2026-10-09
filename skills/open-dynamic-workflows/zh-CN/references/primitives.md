@@ -34,7 +34,7 @@ agent(prompt, opts?) -> Promise<unknown>
   它不会加载 Claude 内置角色的权限、工具或项目里的子 agent 定义。
 - **opts.isolation** —— `"worktree"` 给这个 agent 一个一次性 **git worktree**（默认工作区
   就是 source 目录本身）。要求 source 是有提交的 git 仓库；agent 看到 HEAD，不包含
-  未提交改动。调用结束后清理 worktree，不把改动合入 source。`agent()` 只返回回复，
+  未提交改动。调用结束后清理 worktree，不把改动合入 source。例外：odw 结束一次调用后，若无法确认 agent 的进程树已退出，会保留 worktree，并在错误信息中给出其路径。`agent()` 只返回回复，
   不返回 diff 或可保留的 worktree 路径；需要保留的交付物应进入回复，或显式保存到临时
   worktree 之外。
 
@@ -50,7 +50,7 @@ parallel(thunks: Array<() => Promise<T>>) -> Promise<Array<T | null>>
 
 并发执行每个零参 thunk，并**等它们全部完成**（屏障）。结果按输入顺序返回；可恢复失败
 在对应槽位给出 `null`。全部 thunk 结束后，若有 fatal 错误则重新抛出。屏障不会强杀
-已经运行的 agent。
+已经运行的 agent；`odw stop` 会终止它们的进程树。进程树的结束工作完成后，运行才报告为已停止。
 
 当下一步需要**一整批**结果一次到位时用 `parallel`——去重、计票，或对所有结果做一遍
 综合。

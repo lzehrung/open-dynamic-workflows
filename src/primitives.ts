@@ -111,6 +111,7 @@ export function createPrimitives(
       agentType: opts.agentType,
       isolation: opts.isolation,
     };
+    let started = false;
     let outcome;
     try {
       outcome = await ctx.scheduler.runAgent(async () => {
@@ -124,10 +125,20 @@ export function createPrimitives(
             adapter: opts.adapter ?? ctx.config.settings.defaultAdapter ?? null,
           }),
         );
+        started = true;
         return ctx.bridge.run(request);
       });
     } catch (err) {
-      if (isFatalError(err)) throw err; // budget exhausted / stop: abort the run
+      if (isFatalError(err)) {
+        // A fatal error aborts the run. If this agent had started, settle it so the
+        // run view shows no open agent.
+        if (started) {
+          ctx.emit(
+            event(AGENT_FAILED, { agentId, label: display, phase: activePhase, error: (err as Error).message }),
+          );
+        }
+        throw err;
+      }
       ctx.emit(event(AGENT_FAILED, { agentId, label: display, phase: activePhase, error: String(err) }));
       throw err;
     }

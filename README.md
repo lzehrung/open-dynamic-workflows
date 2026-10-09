@@ -260,7 +260,8 @@ its approvals, its tools. ODW cannot sandbox an agent. It starts the CLI with
 the flags in the adapter `command`, and nothing more. Within its own boundary,
 ODW is responsible for:
 
-- the processes it starts: timeouts and output limits end them;
+- the processes it starts: timeouts, output limits, and `odw stop` end each
+  agent and every process it started;
 - its dashboard server: it listens on 127.0.0.1 by default;
 - the run data it stores: it is readable only by your user;
 - documenting what it passes to each CLI.

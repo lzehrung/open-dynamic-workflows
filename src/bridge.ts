@@ -28,7 +28,7 @@ import {
   type CliResult,
   type Config,
 } from "./adapters/types.js";
-import { AdapterExecutionError, SchemaValidationError } from "./errors.js";
+import { AdapterExecutionError, RunStopped, SchemaValidationError } from "./errors.js";
 import { LiteralRouter, type InvocationPlan, type OptionRouter } from "./router.js";
 import { describeSchema, extractJson, validate, type JsonSchema } from "./schema.js";
 import { withWorkspace } from "./workspace.js";
@@ -84,12 +84,27 @@ export interface BridgeOptions {
   runner?: CommandRunner;
   /** How `agent` options map to a CLI invocation; defaults to {@link LiteralRouter}. */
   router?: OptionRouter;
+  /**
+   * Aborting ends the running adapter process. The pending `run` then throws
+   * {@link RunStopped}, and no further attempt starts.
+   */
+  signal?: AbortSignal;
 }
 
 export class Bridge {
   private readonly source: string;
   private readonly runner: CommandRunner;
   private readonly router: OptionRouter;
+  private readonly signal: AbortSignal | undefined;
+  private unverifiedCleanup = false;
+
+  /**
+   * True once any call ended with an unverified tree. The run reports it, because
+   * `parallel()` surfaces only the first stop.
+   */
+  get hasUnverifiedCleanup(): boolean {
+    return this.unverifiedCleanup;
+  }
 
   constructor(
     private readonly config: Config,
@@ -98,6 +113,7 @@ export class Bridge {
     this.source = options.source ?? process.cwd();
     this.runner = options.runner ?? runCommand;
     this.router = options.router ?? new LiteralRouter();
+    this.signal = options.signal;
   }
 
   async run(request: AgentRequest): Promise<AgentOutcome> {
@@ -112,9 +128,16 @@ export class Bridge {
 
     let problems: string[] = [];
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      // A stop that arrives between attempts must not start another one.
+      if (this.signal?.aborted) throw new RunStopped("run was stopped");
       const prompt = problems.length ? `${basePrompt}\n\n${retryFeedback(problems)}` : basePrompt;
-      const { cli, diff } = await this.invoke(adapter, plan, prompt, timeout);
-      if (!cliOk(cli)) throw new AdapterExecutionError(cliFailureMessage(adapter, cli));
+      const { cli, diff, keptWorktree } = await this.invoke(adapter, plan, prompt, timeout);
+      const kept = cli.treeCleanup === "unverified" ? treeCleanupNote(keptWorktree) : "";
+      // A cancelled attempt is never retried or reported as an adapter failure.
+      if (cli.termination === "cancelled") {
+        throw new RunStopped(`run was stopped${kept}`, cli.treeCleanup === "unverified" ? "unverified" : undefined);
+      }
+      if (!cliOk(cli)) throw new AdapterExecutionError(cliFailureMessage(adapter, cli) + kept);
 
       const text = decodeAdapterOutput(adapter, cli.stdout);
       if (!request.schema) {
@@ -156,7 +179,7 @@ export class Bridge {
     plan: InvocationPlan,
     prompt: string,
     timeout: number | undefined,
-  ): Promise<{ cli: CliResult; diff: string }> {
+  ): Promise<{ cli: CliResult; diff: string; keptWorktree: string | null }> {
     return withWorkspace(this.source, plan.workspaceMode, async (ws) => {
       let promptFile = "";
       let cleanup: (() => Promise<void>) | undefined;
@@ -181,14 +204,28 @@ export class Bridge {
         const stdin = adapter.stdin ? expand(adapter.stdin, context) : undefined;
         // `listAdapters` checks that the CLI can run with this same environment.
         const env = adapterLaunchEnv(adapter);
-        const cli = await this.runner(command, { stdin, cwd: ws.path, env, timeout });
-        const diff = await ws.diff();
-        return { cli, diff };
+        const cli = await this.runner(command, { stdin, cwd: ws.path, env, timeout, signal: this.signal });
+        // A process may still use this worktree: keep it before any git step can fail.
+        const unverified = cli.treeCleanup === "unverified";
+        if (unverified) this.unverifiedCleanup = true;
+        const keptWorktree = unverified ? ws.retain() : null;
+        // A failed call's diff is never read.
+        const diff = cliOk(cli) ? await ws.diff() : "";
+        return { cli, diff, keptWorktree };
       } finally {
         if (cleanup) await cleanup();
       }
     });
   }
+}
+
+/** Say that the agent's process tree is not confirmed gone, and where a kept worktree is. */
+function treeCleanupNote(keptWorktree: string | null): string {
+  if (!keptWorktree) return "; the agent's process tree could not be confirmed gone, so a descendant may still run";
+  return (
+    `; the worktree was kept at '${keptWorktree}' because the agent's process tree could not be confirmed gone. ` +
+    "Once nothing uses it, remove it with `git worktree remove --force` and that path"
+  );
 }
 
 function usesPromptFile(adapter: Adapter): boolean {
@@ -209,7 +246,12 @@ function retryFeedback(problems: string[]): string {
 }
 
 function cliFailureMessage(adapter: Adapter, cli: CliResult): string {
-  const reason = cli.timedOut ? "timed out" : `exited with code ${cli.returncode}`;
+  const reason =
+    cli.termination === "output_limit"
+      ? "exceeded its output limit and was ended"
+      : cli.timedOut
+        ? "timed out"
+        : `exited with code ${cli.returncode}`;
   const detail = (cli.stderr.trim() || cli.stdout.trim()).slice(0, 500);
   const suffix = detail ? `: ${detail}` : "";
   return `adapter '${adapter.name}' ${reason}${suffix}`;

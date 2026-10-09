@@ -10,6 +10,7 @@
  * stack without spawning a subprocess).
  */
 
+import { setMaxListeners } from "node:events";
 import { readFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -23,6 +24,9 @@ import { createPrimitives } from "../primitives.js";
 import { FileControl } from "./file-control.js";
 import { JsonlSink, RunStore } from "./run-store.js";
 
+/** How often a running worker looks for a stop request. */
+const STOP_POLL_MS = 250;
+
 /** Run the workflow described by `runDir`; return its terminal state. */
 export async function executeRun(runDir: string): Promise<string> {
   const store = new RunStore(dirname(runDir));
@@ -34,11 +38,22 @@ export async function executeRun(runDir: string): Promise<string> {
 
   const sink = new JsonlSink(store.eventsPath(runId));
   const args = meta.args;
+  // FileControl sees a stop only before an agent starts. Poll, so that a stop
+  // also ends the agents that already run.
+  const stop = new AbortController();
+  // Each running agent listens for the abort. Node 20 warns when more than 10
+  // listeners wait on one signal, and concurrent agents can exceed that.
+  setMaxListeners(Infinity, stop.signal);
+  let stopPoll: NodeJS.Timeout | undefined;
+
   // ctx is created inside the try so that a config or context-build failure is
   // still recorded as a failed run rather than leaving it stuck in "pending".
   let ctx: RunContext | undefined;
   const dispatched = () => ctx?.scheduler.dispatched ?? 0;
   const spent = () => (ctx ? spentTokens(ctx.usage) : 0);
+  // The worst cleanup state across every agent of the run, for any terminal state.
+  const cleanup = (): { treeCleanup?: "unverified" } =>
+    ctx?.bridge.hasUnverifiedCleanup ? { treeCleanup: "unverified" } : {};
 
   try {
     const baseConfig = loadConfig((meta.configPath as string | null) ?? null);
@@ -60,10 +75,17 @@ export async function executeRun(runDir: string): Promise<string> {
       sink,
       control,
       budgetTotal: (meta.budgetTotal as number | null) ?? null,
+      signal: stop.signal,
     });
 
     store.updateStatus(runId, { state: "running", pid: process.pid });
     sink.emit(event(RUN_STARTED, { runId }));
+    stopPoll = setInterval(() => {
+      if (store.readControl(runId) !== "stop") return;
+      stop.abort();
+      clearInterval(stopPoll);
+    }, STOP_POLL_MS);
+    stopPoll.unref();
 
     const source = readFileSync(script, "utf8");
     const loaded = loadWorkflowScript(source, script);
@@ -94,20 +116,30 @@ export async function executeRun(runDir: string): Promise<string> {
     const result = await loaded.run(primitives, args);
 
     store.writeResult(runId, result);
-    sink.emit(event(RUN_FINISHED, { runId }));
-    store.updateStatus(runId, { state: "done", dispatched: dispatched(), spentTokens: spent() });
+    // A recoverable failure can leave a descendant running even in a finished run.
+    sink.emit(event(RUN_FINISHED, { runId, ...cleanup() }));
+    store.updateStatus(runId, { state: "done", dispatched: dispatched(), spentTokens: spent(), ...cleanup() });
     return "done";
   } catch (err) {
     if (err instanceof RunStopped) {
-      sink.emit(event(RUN_STOPPED, { runId }));
-      store.updateStatus(runId, { state: "stopped", dispatched: dispatched(), spentTokens: spent() });
+      // `parallel()` rethrows only the first stop: report the worst state of all agents.
+      const treeCleanup = err.treeCleanup ?? (ctx?.bridge.hasUnverifiedCleanup ? "unverified" : undefined);
+      sink.emit(event(RUN_STOPPED, { runId, ...(treeCleanup ? { treeCleanup } : {}) }));
+      store.updateStatus(runId, {
+        state: "stopped",
+        dispatched: dispatched(),
+        spentTokens: spent(),
+        ...(treeCleanup ? { treeCleanup } : {}),
+      });
       return "stopped";
     }
     const e = err as Error;
-    sink.emit(event(RUN_FAILED, { runId, error: e.message ?? String(err) }));
+    sink.emit(event(RUN_FAILED, { runId, error: e.message ?? String(err), ...cleanup() }));
     store.writeError(runId, { error: e.message ?? String(err), stack: e.stack ?? null });
-    store.updateStatus(runId, { state: "failed", dispatched: dispatched(), spentTokens: spent() });
+    store.updateStatus(runId, { state: "failed", dispatched: dispatched(), spentTokens: spent(), ...cleanup() });
     return "failed";
+  } finally {
+    clearInterval(stopPoll);
   }
 }
 
