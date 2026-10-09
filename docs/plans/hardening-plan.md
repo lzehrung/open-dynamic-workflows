@@ -79,20 +79,32 @@ Verified against `main` at `aa1b3d5` (fork plus upstream `16f57ee`).
 ## Status
 
 All seven items are implemented as one commit each and reviewed with `review-and-correct` until
-clean. `hardening/integration` holds all seven on top of `upstream/main`.
+clean. `hardening/integration` holds all seven on top of `upstream/main`. A combined review of
+`hardening/integration` found no new critical or important issue.
 
 Verification of `hardening/integration`:
 
 - Fork CI passes on Linux (Node 20 and 24), Windows, and macOS.
-- Local suite: Windows 377 pass, Linux (WSL) 388 pass, 0 failures.
-- CLI smoke on Windows: an allowlisted adapter started a bare `node` command, and `odw stop` ended
-  the running agent in under 1 s.
+- Local suite: Windows 377 pass, Linux (WSL) 389 pass, 0 failures.
+- The Windows single-file binary builds and reports its version.
+- Real agents on Windows, through the binary:
+  - Codex installed by npm ran as `node <script>` and returned non-ASCII text unchanged;
+  - omp with an `allowlist` did not see a host variable that `inherit` passed;
+  - `odw stop` ended omp and its PowerShell tool in about 1 s; the tool did not finish;
+  - Chat Host ran a real Codex turn to completion.
+- Real agents on Linux (WSL), through the built CLI:
+  - omp with an `allowlist` did not see a host variable that `inherit` passed;
+  - `odw stop` ended omp and its shell tool in under 0.5 s; the tool did not finish.
+
+The Linux stop test first failed: omp starts its shell tools in their own process group, so the
+group signal missed them. Item 3 now also signals every descendant found through parent links,
+and keeps the SIGKILL step after the direct child exits.
 
 | Item | Branch | Review |
 | --- | --- | --- |
 | 1. Cross-platform CI | `hardening/1-ci` | clean; 2 minor findings open |
 | 2. Windows launch fidelity | `hardening/2-windows-launch` | clean; 1 minor finding open |
-| 3. Process control | `hardening/3-process-control` | clean |
+| 3. Process control | `hardening/3-process-control` | clean after 1 fix round; 1 minor finding open |
 | 4. Environment policy | `hardening/4-env-policy` | clean |
 | 5. Private run data | `hardening/5-private-run-data` | clean |
 | 6. Server | `hardening/6-server` | clean |
@@ -101,6 +113,8 @@ Verification of `hardening/integration`:
 - Items 1, 2, 3, 5, 6, and 7 are based on `upstream/main` and are independent.
 - Item 4 is based on the integration of the other six. Send its PR after they merge.
 - Without item 1, the Windows `EBUSY` test can still fail on the other branches.
+- Do not merge these branches into fork `main` before upstream merges them. Rebase
+  `hardening/integration` onto `upstream/main` as each PR lands.
 
 Open minor findings:
 
@@ -109,6 +123,8 @@ Open minor findings:
 - Item 1: the new `waitFor` test reproduces the old race only rarely. The `cli-runs` rerun test
   reproduces it reliably.
 - Item 2: an unreadable `.cmd` file gets the generic "cannot run" error, not the I/O error.
+- Item 3: on POSIX, the `ps` snapshot runs synchronously when ODW ends a process tree. It normally
+  takes milliseconds; a hung `ps` can block for up to 2 s.
 
 ## Work
 
@@ -160,8 +176,9 @@ Change:
 - Add an `AbortSignal` to `runCommand`.
 - The worker watches for a stop request and aborts running adapter calls.
 - On timeout, stop, or output limit, end the whole process tree:
-  - POSIX: start the child in its own process group. Send `SIGTERM`, then `SIGKILL` after a short
-    delay.
+  - POSIX: start the child in its own process group. Signal the group and every descendant found
+    through parent links (a harness can start tools in their own group). Send `SIGTERM`, then
+    `SIGKILL` after a short delay, also after the direct child exits.
   - Windows: run `taskkill /T /F` on the child.
 - Record why the process ended: `timeout`, `cancelled`, or `output_limit`.
 - Run Chat Host's Codex through `runCommand`, with a stdout callback for streaming. Apply the same
