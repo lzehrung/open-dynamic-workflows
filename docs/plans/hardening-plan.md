@@ -78,53 +78,85 @@ Verified against `main` at `aa1b3d5` (fork plus upstream `16f57ee`).
 
 ## Status
 
-All seven items are implemented as one commit each and reviewed with `review-and-correct` until
-clean. `hardening/integration` holds all seven on top of `upstream/main`. A combined review of
-`hardening/integration` found no new critical or important issue.
+All seven items are implemented as one commit each on `upstream/main` (16f57ee). `hardening/integration`
+holds all seven. Each item has a PR in the fork. The base of each PR is a branch in the fork, so
+a PR shows only its own commit, and no PR can change fork `main`:
 
-Verification of `hardening/integration`:
-
-- Fork CI passes on Linux (Node 20 and 24), Windows, and macOS.
-- Local suite: Windows 377 pass, Linux (WSL) 389 pass, 0 failures.
-- The Windows single-file binary builds and reports its version.
-- Real agents on Windows, through the binary:
-  - Codex installed by npm ran as `node <script>` and returned non-ASCII text unchanged;
-  - omp with an `allowlist` did not see a host variable that `inherit` passed;
-  - `odw stop` ended omp and its PowerShell tool in about 1 s; the tool did not finish;
-  - Chat Host ran a real Codex turn to completion.
-- Real agents on Linux (WSL), through the built CLI:
-  - omp with an `allowlist` did not see a host variable that `inherit` passed;
-  - `odw stop` ended omp and its shell tool in under 0.5 s; the tool did not finish.
-
-The Linux stop test first failed: omp starts its shell tools in their own process group, so the
-group signal missed them. Item 3 now also signals every descendant found through parent links,
-and keeps the SIGKILL step after the direct child exits.
-
-| Item | Branch | Review |
-| --- | --- | --- |
-| 1. Cross-platform CI | `hardening/1-ci` | clean; 2 minor findings open |
-| 2. Windows launch fidelity | `hardening/2-windows-launch` | clean; 1 minor finding open |
-| 3. Process control | `hardening/3-process-control` | clean after 1 fix round; 1 minor finding open |
-| 4. Environment policy | `hardening/4-env-policy` | clean |
-| 5. Private run data | `hardening/5-private-run-data` | clean |
-| 6. Server | `hardening/6-server` | clean |
-| 7. Security docs | `hardening/7-security-docs` | clean after 1 fix round |
+| Item | Branch | Fork PR | Base |
+| --- | --- | --- | --- |
+| 1. Cross-platform CI | `hardening/1-ci` | #2 | `odw-pr/upstream-main` |
+| 2. Windows launch fidelity | `hardening/2-windows-launch` | #3 | `odw-pr/upstream-main` |
+| 3. Process control | `hardening/3-process-control` | #4 | `odw-pr/upstream-main` |
+| 4. Environment policy | `hardening/4-env-policy` | #5 | `odw-pr/4-base` (the other six) |
+| 5. Private run data | `hardening/5-private-run-data` | #6 | `odw-pr/upstream-main` |
+| 6. Server | `hardening/6-server` | #7 | `odw-pr/upstream-main` |
+| 7. Security docs | `hardening/7-security-docs` | #8 | `odw-pr/upstream-main` |
 
 - Items 1, 2, 3, 5, 6, and 7 are based on `upstream/main` and are independent.
-- Item 4 is based on the integration of the other six. Send its PR after they merge.
+- Item 4 is based on the integration of the other six. Send its upstream PR after they merge.
 - Without item 1, the Windows `EBUSY` test can still fail on the other branches.
 - Do not merge these branches into fork `main` before upstream merges them. Rebase
   `hardening/integration` onto `upstream/main` as each PR lands.
+- Each upstream PR needs a "Why" section: the problem, the evidence, the impact, and why this fix.
+  The fork PR bodies have it. Reuse them.
 
-Open minor findings:
+Verification of `hardening/integration` (head `9155822`):
 
-- Item 1: on Windows, the retried rename can block the dashboard server for up to about 1 s while a
-  chat write waits for a reader.
-- Item 1: the new `waitFor` test reproduces the old race only rarely. The `cli-runs` rerun test
-  reproduces it reliably.
-- Item 2: an unreadable `.cmd` file gets the generic "cannot run" error, not the I/O error.
-- Item 3: on POSIX, the `ps` snapshot runs synchronously when ODW ends a process tree. It normally
-  takes milliseconds; a hung `ps` can block for up to 2 s.
+- Fork CI passes on Linux (Node 20 and 24), Windows (Node 24), and macOS (Node 24).
+- Local suite, measured at `400159b` (`9155822` differs by one comment): Windows on Node 22 and on
+  Node 24, 418 pass; Linux (WSL, Node 24), 422 pass; 0 failures.
+  The Linux suite also passes on two CPUs with six busy loops competing.
+- Real agents, through the built CLI or binary (checked on an earlier head):
+  - Windows: Codex installed by npm ran as `node <script>` and returned non-ASCII text unchanged;
+    omp with an `allowlist` did not see a host variable that `inherit` passed; `odw stop` ended omp
+    and its PowerShell tool in about 1 s; Chat Host ran a real Codex turn to completion.
+  - Linux (WSL): omp with an `allowlist` did not see a host variable that `inherit` passed;
+    `odw stop` ended omp and its shell tool in under 0.5 s.
+- Repeat the real-agent runs on the final head before the upstream PRs. The last changes
+  (await the tree end, the `.exe` and `.com` rule, the `searchEnv` rule) came after those runs.
+
+What the review rounds found:
+
+- `review-and-correct` ran on every slice and on the integration, until no critical or important
+  finding stayed open. Real-agent tests found one more bug: omp starts its shell tools in their own
+  process group, so a group signal missed them. Item 3 now also signals every descendant found
+  through parent links.
+- Copilot reviewed the seven fork PRs twice. Round 1 gave 16 comments. Round 2 gave 8 new ones.
+  All are fixed or answered in the PR threads. Changes that came from them:
+  - Item 3: `runCommand` waits for the whole tree before it resolves, and waits again after
+    `SIGKILL` (at most 1 s). The global tracker (`processTreesSettled`) is gone. A hung `taskkill`
+    is bounded to 5 s.
+  - Item 2: a `.cmd` file is an npm shim only when its whole text equals a known template. Only
+    `.exe`, `.com`, and a `.cmd` shim can launch. `odw init` uses the same check as the launch.
+  - Item 4: a bare command that the host `PATH` does not hold fails with exit code 127, even when
+    the adapter `env` holds a `PATH` that has it. An already-aborted call is cancelled first.
+  - Item 5: ODW sets its own directories to 0700 also on upgrade. It leaves an existing runs root.
+  - Item 6: the warning names the three loopback hosts. Other spellings fail closed.
+  - Item 7: the "no permission flag" fallback no longer claims the note was declared.
+- CI on the PR branches found flaky tests that the first CI runs on the integration missed:
+  - Windows: upstream tests with 5 s or 10 s waits for a real worker (30 s now); a status-write
+    test whose reader never paused; a cleanup that hit a just-exited process (retries now); a
+    hung-`taskkill` test that Node 24 on Windows cannot run as written (the test now accepts the
+    failed-helper fallback there).
+  - macOS: a test that binds `127.0.0.2` (skipped on macOS, which has no such alias).
+  - Linux: three tests that asserted a marker file stayed absent for 4 to 6 s failed on a starved
+    machine. They now check that the descendant is dead when the call resolves.
+
+Open items:
+
+- A third Copilot round has not run on the final heads.
+- Minor findings from the last `review-and-correct` round, not fixed: a directory named `node.exe`
+  next to an npm shim wins over `node` on `PATH` (item 2); the output cap can be exceeded by the
+  replacement characters of a split UTF-8 sequence (item 3, in code that upstream already has).
+- Known limits, documented in the PRs: a workflow that discards an `agent()` promise can finish
+  before that call's process tree is gone; a PID reused inside one poll interval (about 50 ms) can
+  receive the `SIGKILL` of the tree end; `odw serve` counts only `127.0.0.1`, `localhost`, and
+  `::1` as loopback.
+- On Windows, the retried rename can block the dashboard server for up to 500 ms while a chat
+  write waits for a reader.
+- Item 1: the new `waitFor` tests do not reproduce the old race in every run. The `cli-runs` rerun
+  test reproduces it reliably.
+- `package-lock.json` in the main checkout has local changes that are not part of this work.
 
 ## Work
 
