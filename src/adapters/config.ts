@@ -299,6 +299,8 @@ export function listAdapters(config: Config): AdapterListing[] {
 
 /**
  * Derive a one-line permission summary from known CLI flags (else the command).
+ * A note from recognized flags says the posture is declared by the command
+ * flags, not verified. A command with no recognized flag says so instead.
  * Handles both `--flag value` and `--flag=value` spellings — the `=` form is
  * common and a security-transparency note that missed it would silently
  * under-report the most dangerous (`--sandbox=danger-full-access`,
@@ -329,7 +331,8 @@ function permissionNote(command: string[]): string {
       notes.push("full autonomy (explicit denies remain)");
     }
   }
-  return notes.length ? notes.join(" · ") : `runs: ${command[0]}`;
+  if (!notes.length) return `runs: ${command[0]} (no permission flags found; behavior not verified)`;
+  return `${notes.join(" · ")} (declared by command flags, not verified)`;
 }
 
 export { executableCandidates } from "./executable.js";

@@ -119,8 +119,11 @@ Saved workflows run by name (`odw run <name>`); lookup order:
 
 ## Adapters
 
-Codex, Claude Code, Gemini, Qwen, and Kimi work out of the box with no
-configuration. To change the default CLI, tune flags, or plug in a custom CLI,
+Nine CLIs work out of the box with no configuration: Codex, Claude Code,
+Gemini, Qwen, Kimi, Oh My Pi (`omp`), Kilo Code, OpenCode, and Cursor. Each
+built-in has its own permission level. See
+[Permissions](references/adapters.md#permissions-what-each-built-in-may-do)
+before you run one. To change the default CLI, tune flags, or plug in a custom CLI,
 read [`references/adapters.md`](references/adapters.md) and write an
 `odw.config.json` (at the project root or `~/.config/odw/config.json`, or pass
 `--config`).

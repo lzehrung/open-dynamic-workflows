@@ -48,12 +48,24 @@ test("listAdapters surfaces permission postures", () => {
   cfg.adapters["auto"] = { name: "auto", command: ["opencode", "run", "--auto"] };
   cfg.adapters["force"] = { name: "force", command: ["agent", "--print", "--force"] };
   cfg.adapters["kilo-auto"] = { name: "kilo-auto", command: ["kilo", "run", "--auto"] };
+  cfg.adapters["plain"] = { name: "plain", command: ["my-agent", "--print"] };
   const rows = listAdapters(cfg);
   assert.match(rows.find((r) => r.name === "danger")!.permissionNote, /sandbox: danger-full-access/);
   assert.match(rows.find((r) => r.name === "bypass")!.permissionNote, /permission mode: bypassPermissions/);
   assert.match(rows.find((r) => r.name === "auto")!.permissionNote, /full autonomy.*explicit denies/);
   assert.match(rows.find((r) => r.name === "force")!.permissionNote, /full autonomy.*explicit denies/);
-  assert.equal(rows.find((r) => r.name === "kilo-auto")!.permissionNote, "full autonomy");
+  assert.equal(
+    rows.find((r) => r.name === "kilo-auto")!.permissionNote,
+    "full autonomy (declared by command flags, not verified)",
+  );
+  assert.equal(
+    rows.find((r) => r.name === "plain")!.permissionNote,
+    "runs: my-agent (no permission flags found; behavior not verified)",
+  );
+  assert.equal(
+    rows.find((r) => r.name === "kimi")!.permissionNote,
+    "runs: kimi (no permission flags found; behavior not verified)",
+  );
 });
 
 // #10 / #24 — inline runs are flagged, and rerun re-archives them (no divergence note).

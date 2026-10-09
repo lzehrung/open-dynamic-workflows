@@ -46,25 +46,101 @@ test("new built-ins declare their automation, model, workspace, and output contr
     "--prompt",
     "{prompt}",
   ]);
+});
 
-  for (const name of ["kilo", "opencode"]) {
-    const adapter = adapters[name]!;
-    assert.deepEqual(adapter.output, {
-      format: "jsonl",
-      eventType: "text",
-      textPath: ["part", "text"],
-      select: "last",
-    });
-    assert.ok(adapter.command.includes("--auto"));
-    assert.ok(adapter.command.includes("--dir"));
-    assert.ok(adapter.command.includes("{workspace}"));
-    assert.equal(adapter.stdin, "{prompt}");
+// Independent literals: this test guards permission flags against accidental
+// change, so it must not import the values from src/adapters/builtin.ts.
+test("every built-in adapter has its exact command, stdin, flags, output and label", () => {
+  const jsonl = { format: "jsonl", eventType: "text", textPath: ["part", "text"], select: "last" };
+  const expected = {
+    codex: {
+      name: "codex",
+      label: "Codex CLI",
+      command: [
+        "codex",
+        "--search",
+        "exec",
+        "--skip-git-repo-check",
+        "--sandbox",
+        "workspace-write",
+        "--cd",
+        "{workspace}",
+        "-",
+      ],
+      stdin: "{prompt}",
+      flags: { model: ["--model"] },
+    },
+    claude: {
+      name: "claude",
+      label: "Claude Code",
+      command: [
+        "claude",
+        "--print",
+        "--permission-mode",
+        "acceptEdits",
+        "--allowedTools",
+        "WebSearch",
+        "WebFetch",
+        "--no-session-persistence",
+      ],
+      stdin: "{prompt}",
+      flags: { model: ["--model"] },
+    },
+    gemini: {
+      name: "gemini",
+      label: "Gemini CLI",
+      command: ["gemini", "--approval-mode", "auto_edit", "--prompt", "{prompt}"],
+      flags: { model: ["--model"] },
+    },
+    qwen: {
+      name: "qwen",
+      label: "Qwen Code",
+      command: ["qwen", "--approval-mode", "auto-edit", "--output-format", "text", "{prompt}"],
+      flags: { model: ["--model"] },
+    },
+    kimi: {
+      name: "kimi",
+      label: "Kimi CLI",
+      command: ["kimi", "--work-dir", "{workspace}", "--print", "--input-format", "text", "--output-format", "text"],
+      stdin: "{prompt}",
+      flags: { model: ["--model"] },
+    },
+    omp: {
+      name: "omp",
+      label: "Oh My Pi",
+      command: ["omp", "--print", "--no-session", "--approval-mode", "yolo", "--cwd", "{workspace}"],
+      stdin: "{prompt}",
+      flags: { model: ["--model"] },
+    },
+    kilo: {
+      name: "kilo",
+      label: "Kilo Code",
+      command: ["kilo", "run", "--format", "json", "--auto", "--dir", "{workspace}"],
+      stdin: "{prompt}",
+      flags: { model: ["--model"] },
+      output: jsonl,
+    },
+    opencode: {
+      name: "opencode",
+      label: "OpenCode",
+      command: ["opencode", "run", "--format", "json", "--auto", "--dir", "{workspace}"],
+      stdin: "{prompt}",
+      flags: { model: ["--model"] },
+      output: jsonl,
+    },
+    cursor: {
+      name: "cursor",
+      label: "Cursor Agent CLI",
+      command: ["agent", "--print", "--force", "--trust", "--output-format", "text", "--workspace", "{workspace}"],
+      stdin: "{prompt}",
+      flags: { model: ["--model"] },
+    },
+  };
+  const { adapters } = defaultConfig();
+  assert.deepEqual(Object.keys(adapters).sort(), Object.keys(expected).sort());
+  for (const [name, spec] of Object.entries(expected)) {
+    assert.deepEqual(adapters[name], spec, `built-in adapter '${name}'`);
   }
-
-  assert.ok(adapters.cursor!.command.includes("--force"));
-  assert.ok(adapters.cursor!.command.includes("--trust"));
-  assert.ok(adapters.cursor!.command.includes("{workspace}"));
-  assert.equal(adapters.cursor!.stdin, "{prompt}");
 });
 
 test("config example preserves every built-in adapter contract", () => {

@@ -232,6 +232,39 @@ ODW 已实现下列原语能力。依赖宿主私有运行机制的脚本,迁移
 宿主时需要去掉。可恢复失败产生的 `null` 需要显式处理：接受部分结果、重试,或在要求完整
 交付时报告失败。
 
+## 安全
+
+- workflow 脚本在 ODW 进程内以 JavaScript 运行,拥有你的用户权限。只运行可信脚本。
+  编译检查和可移植性警告都不是沙箱。运行 agent 生成的脚本之前,先审查它。
+- 边界的各部分由不同方负责:
+
+  | 负责方 | 职责 |
+  | --- | --- |
+  | ODW | 进程限制、服务入口、准确的文档 |
+  | Harness(agent CLI) | 工具权限、沙箱、审批、认证 |
+  | 部署环境 | 隔离:容器、虚拟机、操作系统账户、文件系统、网络 |
+
+- 每个内置适配器的权限姿态不同。见
+  [权限说明](skills/open-dynamic-workflows/zh-CN/references/adapters.md#权限每个内置适配器能做什么)。
+  `odw init --check` 只显示命令参数所声明的内容,不验证实际行为。没有任何可识别权限参数的命令
+  (例如 `kimi`)会显示 `no permission flags found; behavior not verified`。
+- `isolation: "worktree"` 把编辑与你的工作树隔离开。它不是安全边界:绝对路径和符号链接
+  可以到达隔离区之外。
+- 每个 agent CLI 都继承 `odw` 进程的完整环境变量。
+- 内置的 `gemini` 和 `qwen` 通过命令行参数传递提示词。本机其他用户可以在进程列表中看到
+  它。其他内置适配器使用 stdin。
+- 运行根目录(默认 `~/.odw/runs`)保存 workflow 参数、agent 输出、worker 日志和 Chat Host
+  聊天记录(`_chat/sessions.json`)。请将它视为敏感数据。
+- `odw serve` 默认绑定 127.0.0.1。ODW 只把 `127.0.0.1`、`localhost` 和 `::1` 视为回环地址。
+  任何其他 `--host` 都算非回环,即使是 `127.0.0.2`。使用非回环的 `--host` 时,任何能访问该端口的人都可以
+  在无认证的情况下读取运行记录、workflow 源码、聊天记录和设置(适配器命令行和本地路径)。
+  适配器命令行可能包含敏感值。写操作会被拒绝。
+  - "运行记录"是两份列表。一份是 ODW 自己的运行目录,另一份是 ODW 从 Claude 项目目录读取的
+    Claude Code 运行:默认为 `~/.claude/projects`,设置了 `CLAUDE_CONFIG_DIR` 时为
+    `$CLAUDE_CONFIG_DIR/projects`。`claudeJobsScope` 默认为 `"all"`,因此 Claude 一侧覆盖该目录
+    下的所有项目目录,而不只是被服务的仓库:运行元数据、作者 log 行和最终结果(不含原始 agent
+    转录)。设置 `claudeJobsScope: "project"` 可缩小到被服务的仓库及其 worktree。
+
 ## 运行与观测
 
 在交互式终端里,`odw run` 会附着一个**实时前台视图**——每个 agent 的启动、转轮、结算,
