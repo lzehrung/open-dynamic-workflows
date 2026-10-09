@@ -29,7 +29,7 @@ import { startRun, startRunFromSource, waitFor } from "./runtime/launcher.js";
 import { attachRun, formatEvent, resolveRunMode, type RunMode } from "./runtime/live-view.js";
 import { RunObserver } from "./runtime/run-liveness.js";
 import { RunStore, TERMINAL_STATES } from "./runtime/run-store.js";
-import { startServer } from "./runtime/server.js";
+import { nonLoopbackBindWarning, startServer } from "./runtime/server.js";
 import { executeRun } from "./runtime/worker.js";
 import { isSeaBinary } from "./sea.js";
 import { listWorkflows, resolveWorkflow } from "./workflows/resolve.js";
@@ -582,11 +582,8 @@ async function cmdServe(rest: string[]): Promise<number> {
   });
   process.stdout.write(`odw dashboard → ${handle.url}\n`);
   process.stdout.write(`  watching ${store.root}\n`);
-  if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1") {
-    process.stderr.write(
-      `  ⚠ bound to ${host}: every project's runs (prompts, results) are reachable off-localhost — use only on a trusted network\n`,
-    );
-  }
+  const bindWarning = nonLoopbackBindWarning(host);
+  if (bindWarning) process.stderr.write(`${bindWarning}\n`);
   process.stdout.write("  press Ctrl-C to stop\n");
   if (values.open) openBrowser(handle.url);
 
