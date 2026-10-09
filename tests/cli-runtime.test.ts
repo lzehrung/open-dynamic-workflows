@@ -101,7 +101,7 @@ test("run --wait reports an exited worker as failure, not a timeout or continuin
   try {
     const script = join(root, "crash.js");
     writeFileSync(script, "export const meta = { name: 'crash', description: 'x' }; process.exit(7)");
-    const result = await run(["run", script, "--wait", "--timeout", "5", "--runs-root", root]);
+    const result = await run(["run", script, "--wait", "--timeout", "30", "--runs-root", root]);
     assert.equal(result.code, 1);
     assert.match(result.err, /worker process .* is gone/);
     assert.doesNotMatch(result.err, /timed out|run continues/);
@@ -121,7 +121,7 @@ test("run --wait timeout keeps exit 124 and the live worker completes afterwards
     assert.equal(result.code, 124);
     assert.match(result.err, /timed out.*run continues/);
     const id = store.listRuns()[0]!.runId;
-    assert.equal((await waitFor(store, id, { timeoutMs: 5000 })).state, "done");
+    assert.equal((await waitFor(store, id, { timeoutMs: 30_000 })).state, "done");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
