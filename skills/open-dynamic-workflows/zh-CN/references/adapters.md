@@ -41,15 +41,13 @@ shell 出去执行一个本地命令，通过 stdin 或一个参数把拼好的 
 
 ### `omp` 说明
 
-内置 `omp` 带着 `--no-tools`（适合纯文本扇出；对必须跑 `git diff` 的评审是致命的）。
-要恢复工具，覆盖该适配器——条目会**整份替换**内置，所以要重写完整 `command`，并保留
-模型载体：
+内置 `omp` 带工具运行，并使用 `--approval-mode yolo`。要改它的参数，覆盖该适配器——
+条目会**整份替换**内置，所以要重写完整 `command`，并保留模型载体：
 
 ```json
 {
   "adapters": {
     "omp": {
-      "label": "Oh My Pi (tools enabled)",
       "command": ["omp", "--print", "--no-session", "--approval-mode", "yolo", "--cwd", "{workspace}"],
       "stdin": "{prompt}",
       "flags": { "model": ["--model"] }

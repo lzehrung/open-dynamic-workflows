@@ -45,16 +45,14 @@ A useful minimal-privilege split: let `claude` write code (acceptEdits) and let
 
 ### `omp` notes
 
-Built-in `omp` runs with `--no-tools` (fine for pure-text fan-out; fatal for
-reviewers that must `git diff`). To restore tools, override the adapter — an
-entry **replaces** the built-in wholesale, so restate the full `command` and
-keep the model carrier:
+Built-in `omp` runs with tools and `--approval-mode yolo`. To change its flags,
+override the adapter. An entry **replaces** the built-in wholesale, so restate
+the full `command` and keep the model carrier:
 
 ```json
 {
   "adapters": {
     "omp": {
-      "label": "Oh My Pi (tools enabled)",
       "command": ["omp", "--print", "--no-session", "--approval-mode", "yolo", "--cwd", "{workspace}"],
       "stdin": "{prompt}",
       "flags": { "model": ["--model"] }

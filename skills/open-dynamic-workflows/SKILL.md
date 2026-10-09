@@ -105,8 +105,8 @@ const [analysis, implementation] = await parallel([
 Model ids are CLI-specific (omp fuzzy-matches provider/model strings; Codex
 expects Codex ids). If an adapter omits `flags.model`, the request is **not**
 silently ignored — a routing note appears in the run logs and the CLI default
-is used. To change tools/flags for `omp` (its built-in ships `--no-tools`),
-override the adapter in config and **keep** `flags: { "model": ["--model"] }`
+is used. To change the flags of a built-in such as `omp`, override the adapter
+in config and **keep** `flags: { "model": ["--model"] }`
 so per-call `model` still works — see
 [`references/adapters.md`](references/adapters.md).
 
