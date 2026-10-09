@@ -29,6 +29,16 @@ export type AdapterOutput =
       select: "last";
     };
 
+/**
+ * Which host environment variables an agent CLI receives. `inherit` passes every
+ * variable except the names in `deny`. `allowlist` passes only the names in
+ * `allow`. Names compare without case on Windows and exactly elsewhere. An
+ * adapter's `env` values apply after the policy.
+ */
+export type EnvPolicy =
+  | { mode: "inherit"; deny?: string[] }
+  | { mode: "allowlist"; allow: string[] };
+
 /** How to invoke one coding-agent CLI. */
 export interface Adapter {
   name: string;
@@ -36,8 +46,10 @@ export interface Adapter {
   command: string[];
   /** Optional stdin template (e.g. `"{prompt}"`). */
   stdin?: string;
-  /** Extra environment variables layered over the process environment. */
+  /** Extra environment variables. They apply after {@link Adapter.envPolicy}. */
   env?: Record<string, string>;
+  /** Which host variables this CLI receives; falls back to the run-wide `Settings.envPolicy`. */
+  envPolicy?: EnvPolicy;
   /** Per-call timeout in seconds; falls back to the run-wide setting. */
   timeout?: number;
   /** Human-friendly label for progress display. */
@@ -73,6 +85,13 @@ export interface Settings {
    * broader — it exposes other projects' run names/results on this loopback server.
    */
   claudeJobsScope: "all" | "project";
+  /**
+   * Which host environment variables every agent CLI and Chat Host's Codex
+   * receive. An adapter's own `envPolicy` overrides it for that adapter.
+   * Absent means `{ mode: "inherit" }`: the config loader fills it, and a
+   * programmatic `Config` may leave it out.
+   */
+  envPolicy?: EnvPolicy;
 }
 
 export interface Config {

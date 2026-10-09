@@ -250,7 +250,11 @@ ODW 已实现下列原语能力。依赖宿主私有运行机制的脚本,迁移
   (例如 `kimi`)会显示 `no permission flags found; behavior not verified`。
 - `isolation: "worktree"` 把编辑与你的工作树隔离开。它不是安全边界:绝对路径和符号链接
   可以到达隔离区之外。
-- 每个 agent CLI 都继承 `odw` 进程的完整环境变量。
+- 默认情况下,每个 agent CLI 和 Chat Host 的 Codex 都继承 `odw` 进程的完整环境变量。
+  `envPolicy` 可以改变这一点。`inherit` 加 `deny` 会删除指定的变量。`allowlist` 加
+  `allow` 只传递指定的变量。适配器的 `env` 值在策略之后生效。过滤不能保护 CLI 可以读取的
+  凭据文件。见
+  [环境策略](skills/open-dynamic-workflows/zh-CN/references/adapters.md#环境策略)。
 - 内置的 `gemini` 和 `qwen` 通过命令行参数传递提示词。本机其他用户可以在进程列表中看到
   它。其他内置适配器使用 stdin。
 - 运行根目录(默认 `~/.odw/runs`)保存 workflow 参数、agent 输出、worker 日志和 Chat Host

@@ -273,7 +273,12 @@ accept a partial result, retry, or fail when the task requires every item.
   shows `no permission flags found; behavior not verified`.
 - `isolation: "worktree"` isolates edits from your working tree. It is not a
   security boundary: absolute paths and symlinks can reach outside it.
-- Every agent CLI inherits the full environment of the `odw` process.
+- By default, every agent CLI and Chat Host's Codex inherit the full environment
+  of the `odw` process. `envPolicy` changes this. `inherit` with `deny` removes
+  the named variables. `allowlist` with `allow` passes only the named variables.
+  Adapter `env` values apply after the policy. Filtering does not protect
+  credential files that the CLI can read. See
+  [Environment policy](skills/open-dynamic-workflows/references/adapters.md#environment-policy).
 - The `gemini` and `qwen` built-ins pass the prompt as a command-line argument.
   Other local users can see it in the process list. The other built-ins use
   stdin.

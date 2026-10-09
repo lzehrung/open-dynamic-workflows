@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { resolveAdapter } from "./adapters/config.js";
-import { adapterLaunchEnv } from "./adapters/executable.js";
+import { buildChildEnv } from "./adapters/env.js";
 import { expand, expandAll, type PlaceholderContext } from "./adapters/placeholders.js";
 import { decodeAdapterOutput } from "./adapters/output.js";
 import { runCommand, type CommandRunner } from "./adapters/runner.js";
@@ -203,9 +203,18 @@ export class Bridge {
         };
         const command = [...expandAll(adapter.command, context), ...plan.extraArgs];
         const stdin = adapter.stdin ? expand(adapter.stdin, context) : undefined;
-        // `listAdapters` checks that the CLI can run with this same environment.
-        const env = adapterLaunchEnv(adapter);
-        const cli = await this.runner(command, { stdin, cwd: ws.path, env, timeout, signal: this.signal });
+        // The policy filters the host environment, so the child gets a complete
+        // environment of its own. The host environment still finds the
+        // executable, so a filtered PATH does not stop the launch.
+        const env = buildChildEnv(adapter.envPolicy ?? this.config.settings.envPolicy, adapter.env, process.env);
+        const cli = await this.runner(command, {
+          stdin,
+          cwd: ws.path,
+          env,
+          searchEnv: process.env,
+          timeout,
+          signal: this.signal,
+        });
         // A leftover process may still use this tree, so removing it could
         // break that process and hide what it did. Keep it and say where. This
         // comes first: no later git step may fail into a removal.

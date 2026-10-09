@@ -19,7 +19,7 @@ export * from "./errors.js";
 export * from "./events.js";
 
 // L1 adapters
-export type { Adapter, Settings, Config, CliResult } from "./adapters/types.js";
+export type { Adapter, Settings, Config, CliResult, EnvPolicy } from "./adapters/types.js";
 export { BUILTIN_ADAPTERS, DEFAULT_SETTINGS } from "./adapters/builtin.js";
 export { expand, expandAll, PLACEHOLDERS } from "./adapters/placeholders.js";
 

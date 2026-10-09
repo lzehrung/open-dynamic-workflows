@@ -21,8 +21,8 @@ import { dirname, join } from "node:path";
 
 import { AdapterNotFound, ConfigError } from "../errors.js";
 import { BUILTIN_ADAPTERS, DEFAULT_SETTINGS, type RawAdapter } from "./builtin.js";
-import { adapterLaunchEnv, probeCommand } from "./executable.js";
-import type { Adapter, AdapterFlags, AdapterOutput, Config, Settings } from "./types.js";
+import { probeCommand } from "./executable.js";
+import type { Adapter, AdapterFlags, AdapterOutput, Config, EnvPolicy, Settings } from "./types.js";
 
 export const CONFIG_ENV_VAR = "ODW_CONFIG";
 
@@ -63,9 +63,10 @@ const KNOWN_TOP_KEYS = [
   "workflowsRoot",
   "claudeWorkflowsRoot",
   "claudeJobsScope",
+  "envPolicy",
 ] as const;
 
-const KNOWN_ADAPTER_KEYS = ["command", "stdin", "env", "timeout", "label", "flags", "output"] as const;
+const KNOWN_ADAPTER_KEYS = ["command", "stdin", "env", "envPolicy", "timeout", "label", "flags", "output"] as const;
 
 /**
  * Lint a parsed config object for keys odw would silently ignore.
@@ -144,7 +145,8 @@ function editDistance(a: string, b: string): number {
 
 /** Config from built-ins only — handy for tests and programmatic use. */
 export function defaultConfig(): Config {
-  return { adapters: buildAdapters({}), settings: { ...DEFAULT_SETTINGS } };
+  const settings = { ...DEFAULT_SETTINGS, envPolicy: { ...DEFAULT_SETTINGS.envPolicy } };
+  return { adapters: buildAdapters({}), settings };
 }
 
 /**
@@ -258,8 +260,8 @@ export interface AdapterListing {
   /** Display label (adapter.label, else the name). */
   label: string;
   /**
-   * Whether the CLI can run here. Its executable must resolve on PATH, as the
-   * adapter gets it: the process environment with the adapter's `env` on top.
+   * Whether the CLI can run here. Its executable must resolve on the `PATH` of
+   * odw itself: a `PATH` in the adapter's `env` does not count.
    * On Windows, odw must also be able to launch it. Every caller that needs
    * "installed" reads this.
    */
@@ -285,7 +287,7 @@ export function listAdapters(config: Config): AdapterListing[] {
     .sort()
     .map((name) => {
       const a = config.adapters[name]!;
-      const probe = probeCommand(a.command[0]!, adapterLaunchEnv(a));
+      const probe = probeCommand(a.command[0]!);
       return {
         name,
         label: a.label ?? name,
@@ -457,6 +459,7 @@ function buildAdapter(name: string, spec: RawAdapter): Adapter {
   if (spec.env !== undefined) {
     adapter.env = Object.fromEntries(Object.entries(spec.env).map(([k, v]) => [k, String(v)]));
   }
+  if (spec.envPolicy !== undefined) adapter.envPolicy = buildEnvPolicy(`adapter '${name}'`, spec.envPolicy);
   if (spec.timeout !== undefined) adapter.timeout = Number(spec.timeout);
   if (spec.label !== undefined) adapter.label = spec.label;
   if (spec.flags !== undefined) adapter.flags = buildFlags(name, spec.flags);
@@ -511,6 +514,47 @@ function buildOutput(name: string, raw: unknown): AdapterOutput {
   };
 }
 
+/**
+ * Validate and normalise an environment policy. `owner` names where it was set:
+ * `config` for the top level, `adapter '<name>'` for an adapter.
+ */
+function buildEnvPolicy(owner: string, raw: unknown): EnvPolicy {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new ConfigError(`${owner} 'envPolicy' must be an object`);
+  }
+  const value = raw as Record<string, unknown>;
+  const mode = value.mode;
+  if (mode !== "inherit" && mode !== "allowlist") {
+    throw new ConfigError(`${owner} 'envPolicy.mode' must be 'inherit' or 'allowlist'`);
+  }
+  // `inherit` takes `deny` and `allowlist` takes `allow`. A typo in a security
+  // setting must fail loudly, so every other key is an error.
+  const known = mode === "allowlist" ? "allow" : "deny";
+  const stray = Object.keys(value).find((key) => key !== "mode" && key !== known);
+  if (stray !== undefined) {
+    const usedWith = stray === "allow" ? "allowlist" : stray === "deny" ? "inherit" : null;
+    throw new ConfigError(
+      usedWith
+        ? `${owner} 'envPolicy.${stray}' is only valid with mode '${usedWith}'`
+        : `${owner} 'envPolicy.${stray}' is not a known key; mode '${mode}' takes 'mode' and '${known}'`,
+    );
+  }
+  const names = (key: "allow" | "deny"): string[] => {
+    const list = value[key];
+    if (!Array.isArray(list) || !list.every((name) => typeof name === "string" && name.length > 0)) {
+      throw new ConfigError(`${owner} 'envPolicy.${key}' must be an array of non-empty strings`);
+    }
+    return [...(list as string[])];
+  };
+  if (mode === "allowlist") {
+    if (value.allow === undefined) {
+      throw new ConfigError(`${owner} 'envPolicy.allow' is required with mode 'allowlist'`);
+    }
+    return { mode, allow: names("allow") };
+  }
+  return value.deny === undefined ? { mode } : { mode, deny: names("deny") };
+}
+
 function buildSettings(raw: Record<string, unknown>): Settings {
   const pick = <T>(key: keyof Settings, fallback: T): T =>
     raw[key as string] === undefined || raw[key as string] === null
@@ -531,5 +575,7 @@ function buildSettings(raw: Record<string, unknown>): Settings {
     claudeWorkflowsRoot: pick("claudeWorkflowsRoot", DEFAULT_SETTINGS.claudeWorkflowsRoot),
     // Only "project" narrows; anything else (incl. null/garbage) keeps the "all" default.
     claudeJobsScope: raw["claudeJobsScope"] === "project" ? "project" : DEFAULT_SETTINGS.claudeJobsScope,
+    envPolicy:
+      raw.envPolicy === undefined ? { ...DEFAULT_SETTINGS.envPolicy } : buildEnvPolicy("config", raw.envPolicy),
   };
 }

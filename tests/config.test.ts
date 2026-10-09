@@ -402,6 +402,11 @@ function restoreEnv(name: string, value: string | undefined): void {
   else process.env[name] = value;
 }
 
+/** Remove temp directories. On Windows, a child that just exited can hold its working directory for a moment. */
+function removeDirs(...dirs: string[]): void {
+  for (const dir of dirs) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+}
+
 /**
  * Stub CLI files for `withPathDir`. Windows starts only `.exe` files, so a stub
  * there gets that extension.
@@ -413,10 +418,14 @@ function stubs(...names: string[]): Record<string, string> {
 }
 
 /**
- * Run `fn` with PATH set to a temp directory that holds `files` (made
- * executable), and with PATHEXT set to `.exe;.cmd`.
+ * Run `fn` with the host PATH set to a temp directory, and PATHEXT set to
+ * `.exe;.cmd`. The directory holds `files` (made executable). `fn` gets the
+ * directory, so it can add more files.
  */
-async function withPathDir(files: Record<string, string>, fn: () => void | Promise<void>): Promise<void> {
+async function withPathDir(
+  files: Record<string, string>,
+  fn: (dir: string) => void | Promise<void>,
+): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), "odw-launcher-"));
   const oldPath = process.env.PATH;
   const oldPathext = process.env.PATHEXT;
@@ -427,11 +436,11 @@ async function withPathDir(files: Record<string, string>, fn: () => void | Promi
     }
     process.env.PATH = dir;
     process.env.PATHEXT = ".exe;.cmd";
-    await fn();
+    await fn(dir);
   } finally {
     restoreEnv("PATH", oldPath);
     restoreEnv("PATHEXT", oldPathext);
-    rmSync(dir, { recursive: true, force: true });
+    removeDirs(dir);
   }
 }
 
@@ -481,71 +490,72 @@ test(
   },
 );
 
-// --- the adapter's own env decides where its CLI is found ---------------------
+// --- the host PATH finds a CLI, and the env.PATH of an adapter does not -------
 
-/** The file name of an executable on this platform. */
-const exeName = (name: string): string => (process.platform === "win32" ? `${name}.exe` : name);
-
-/** Put a CLI that prints `ok` into `dir`. Windows needs a real `.exe`, so it gets a copy of Node. */
+/**
+ * Put a CLI that prints `ok` into `dir`. On Windows it is a copy of Node, so the
+ * adapter command must pass `-p 'ok'`. Elsewhere it is a shell script.
+ */
 function writeOkCli(dir: string, name: string): void {
   if (process.platform === "win32") {
-    copyFileSync(execPath, join(dir, exeName(name)));
+    copyFileSync(execPath, join(dir, `${name}.exe`));
     return;
   }
   writeFileSync(join(dir, name), "#!/bin/sh\nprintf ok\n");
   chmodSync(join(dir, name), 0o755);
 }
 
-test("listAdapters, resolveAdapter, and Bridge all find a CLI with the adapter's own env", async () => {
+test("an adapter's own env.PATH does not change where odw finds its CLI", async () => {
   const alphaDir = mkdtempSync(join(tmpdir(), "odw-alpha-"));
   const emptyDir = mkdtempSync(join(tmpdir(), "odw-empty-"));
   const workDir = mkdtempSync(join(tmpdir(), "odw-work-"));
   try {
     writeOkCli(alphaDir, "odw-alpha-cli");
-    // The host PATH holds only the CLI of beta. The `-p 'ok'` arguments make Node print `ok`.
-    await withPathDir({ [exeName("odw-beta-cli")]: "" }, async () => {
+    await withPathDir({}, async (hostDir) => {
+      writeOkCli(hostDir, "odw-beta-cli");
       const cfg = defaultConfig();
       cfg.adapters = {
-        // The host PATH lacks the CLI of alpha, but the env of alpha holds it.
+        // Only the env.PATH of alpha holds the CLI of alpha.
         alpha: { name: "alpha", command: ["odw-alpha-cli", "-p", "'ok'"], env: { PATH: alphaDir } },
-        // The host PATH holds the CLI of beta, but the env of beta hides it.
+        // The host PATH holds the CLI of beta, and the env.PATH of beta names an empty directory.
         beta: { name: "beta", command: ["odw-beta-cli", "-p", "'ok'"], env: { PATH: emptyDir } },
       };
       assert.deepEqual(
         listAdapters(cfg).map((row) => [row.name, row.installed]),
         [
-          ["alpha", true],
-          ["beta", false],
+          ["alpha", false],
+          ["beta", true],
         ],
       );
-      assert.equal(resolveAdapter(cfg).name, "alpha");
-      // The launch agrees with the check: alpha runs, and beta fails to launch.
+      assert.equal(resolveAdapter(cfg).name, "beta");
+      // The launch agrees with the check: alpha fails to launch, and beta runs.
       const bridge = new Bridge(cfg, { source: workDir });
-      assert.equal((await bridge.run({ prompt: "hi", adapter: "alpha" })).text, "ok");
       await assert.rejects(
-        () => bridge.run({ prompt: "hi", adapter: "beta" }),
-        (err: Error) => err instanceof AdapterExecutionError && /failed to launch 'odw-beta-cli'/.test(err.message),
+        () => bridge.run({ prompt: "hi", adapter: "alpha" }),
+        (err: Error) =>
+          err instanceof AdapterExecutionError &&
+          err.message.includes("exited with code 127") &&
+          err.message.includes("failed to launch 'odw-alpha-cli': not found in the PATH of the host environment"),
       );
+      assert.equal((await bridge.run({ prompt: "hi", adapter: "beta" })).text, "ok");
     });
   } finally {
-    for (const dir of [alphaDir, emptyDir, workDir]) rmSync(dir, { recursive: true, force: true });
+    removeDirs(alphaDir, emptyDir, workDir);
   }
 });
 
 test(
-  "a launcher that only the adapter's own env.PATH reaches is not installed, and the launch fails the same way",
+  "a Windows launcher on the host PATH that odw cannot run stays unlaunchable, even when the env.PATH of the adapter holds a real executable",
   { skip: process.platform !== "win32" },
   async () => {
-    const launcherDir = mkdtempSync(join(tmpdir(), "odw-launcher-"));
+    const exeDir = mkdtempSync(join(tmpdir(), "odw-exe-"));
     const workDir = mkdtempSync(join(tmpdir(), "odw-work-"));
     try {
-      writeFileSync(join(launcherDir, "odw-env-agent.cmd"), CURSOR_AGENT_CMD);
-      // The host PATH holds an executable of that name. The env of the adapter reaches the launcher instead.
-      await withPathDir({ "odw-env-agent.exe": "" }, async () => {
+      // A real executable of the same name, in the env.PATH of the adapter. odw does not look there.
+      writeOkCli(exeDir, "odw-env-agent");
+      await withPathDir({ "odw-env-agent.cmd": CURSOR_AGENT_CMD }, async () => {
         const cfg = defaultConfig();
-        cfg.adapters = {
-          envagent: { name: "envagent", command: ["odw-env-agent"], env: { PATH: launcherDir } },
-        };
+        cfg.adapters = { envagent: { name: "envagent", command: ["odw-env-agent"], env: { PATH: exeDir } } };
         const [row] = listAdapters(cfg);
         assert.equal(row!.installed, false);
         assert.match(row!.launchProblem ?? "", /odw-env-agent\.cmd' is a batch launcher that odw cannot run$/);
@@ -557,7 +567,36 @@ test(
         );
       });
     } finally {
-      for (const dir of [launcherDir, workDir]) rmSync(dir, { recursive: true, force: true });
+      removeDirs(exeDir, workDir);
+    }
+  },
+);
+
+test(
+  "a Windows launcher that only the env.PATH of the adapter holds is not found, so it has no launch problem",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const launcherDir = mkdtempSync(join(tmpdir(), "odw-launcher-"));
+    const workDir = mkdtempSync(join(tmpdir(), "odw-work-"));
+    try {
+      writeFileSync(join(launcherDir, "odw-env-agent.cmd"), CURSOR_AGENT_CMD);
+      await withPathDir({}, async () => {
+        const cfg = defaultConfig();
+        cfg.adapters = { envagent: { name: "envagent", command: ["odw-env-agent"], env: { PATH: launcherDir } } };
+        // odw does not look in the env.PATH of the adapter, so it never reads the launcher.
+        const [row] = listAdapters(cfg);
+        assert.equal(row!.installed, false);
+        assert.equal(row!.launchProblem, undefined);
+        await assert.rejects(
+          () => new Bridge(cfg, { source: workDir }).run({ prompt: "hi", adapter: "envagent" }),
+          (err: Error) =>
+            err instanceof AdapterExecutionError &&
+            err.message.includes("exited with code 127") &&
+            err.message.includes("failed to launch 'odw-env-agent': not found in the PATH of the host environment"),
+        );
+      });
+    } finally {
+      removeDirs(launcherDir, workDir);
     }
   },
 );

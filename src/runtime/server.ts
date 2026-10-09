@@ -48,6 +48,7 @@ import {
   resolveClaudeWorkflowsRoot,
   resolveWorkflowsRoot,
 } from "../adapters/config.js";
+import { buildChildEnv } from "../adapters/env.js";
 import { WINDOWS_LAUNCHERS_DOC } from "../adapters/executable.js";
 import { DEFAULT_MAX_OUTPUT_BYTES, MAX_TERMINATION_MS, runCommand } from "../adapters/runner.js";
 import type { Config } from "../adapters/types.js";
@@ -304,7 +305,12 @@ export function startServer(options: ServeOptions): Promise<ServeHandle> {
   const chat = new ChatStore(store.root, cwd);
   const clients = new Set<ServerResponse>();
   const chatRuntime = createChatRuntime(
-    options.chatRunner ?? createDefaultChatRunner({ timeout: config.settings.timeout ?? undefined }),
+    options.chatRunner ??
+      createDefaultChatRunner({
+        timeout: config.settings.timeout ?? undefined,
+        // Per turn: the host environment can change while the server runs.
+        env: () => buildChildEnv(config.settings.envPolicy, undefined, process.env),
+      }),
     (sessionId) => broadcastChat(clients, sessionId),
   );
 
@@ -656,11 +662,22 @@ async function abortChatTurns(runtime: ChatRuntime): Promise<boolean> {
 /**
  * The default chat runner: one `codex exec` call per turn, run through the
  * shared process runner. The turn gets its timeout, output limit, and
- * process-tree cleanup, and ends when the turn's signal aborts.
+ * process-tree cleanup, and ends when the turn's signal aborts. `env` is the
+ * whole environment of Codex; omit it to inherit the environment of `odw`. The
+ * environment of `odw` finds the `codex` executable in both cases.
  */
-export function createDefaultChatRunner(options: { command?: string[]; timeout?: number } = {}): ChatTurnRunner {
+export function createDefaultChatRunner(options: {
+  command?: string[];
+  timeout?: number;
+  /**
+   * The environment for the CLI. A factory builds it per turn, so a variable
+   * that changes after the server starts still reaches the next launch.
+   */
+  env?: Record<string, string> | (() => Record<string, string>);
+} = {}): ChatTurnRunner {
   const command = options.command ?? ["codex"];
   return async ({ prompt, cwd, signal }, onChunk) => {
+    const env = typeof options.env === "function" ? options.env() : options.env;
     const result = await runCommand(
       [
         ...command,
@@ -675,7 +692,15 @@ export function createDefaultChatRunner(options: { command?: string[]; timeout?:
         "never",
         "-",
       ],
-      { stdin: prompt, cwd, timeout: options.timeout, signal, onStdout: (chunk) => onChunk(stripAnsi(chunk)) },
+      {
+        stdin: prompt,
+        cwd,
+        env,
+        searchEnv: process.env,
+        timeout: options.timeout,
+        signal,
+        onStdout: (chunk) => onChunk(stripAnsi(chunk)),
+      },
     );
     // The cleanup state belongs in the failure text: a caller that stores the
     // message must be able to tell that a descendant may still run.

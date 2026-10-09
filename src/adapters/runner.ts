@@ -13,16 +13,23 @@
  */
 
 import { execFile, spawn } from "node:child_process";
+import { resolve as resolvePath } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 
 import type { CliResult } from "./types.js";
-import { resolveExecutable, resolveWindowsLaunch } from "./executable.js";
+import { isBareCommand, resolveExecutable, resolveWindowsLaunch } from "./executable.js";
 
 export interface RunCommandOptions {
   stdin?: string;
   cwd?: string;
   env?: Record<string, string>;
+  /**
+   * The environment that finds the executable; defaults to `env`. A caller that
+   * filters `env` passes the host environment here, so a filtered `PATH` still
+   * finds the command.
+   */
+  searchEnv?: NodeJS.ProcessEnv;
   /** Seconds before the process tree is ended; omit for no timeout. */
   timeout?: number;
   /** Combined stdout+stderr bytes to retain before ending the process tree; omit for a safe default. */
@@ -64,6 +71,13 @@ export const MAX_TERMINATION_MS =
   Math.max(2 * SNAPSHOT_TIMEOUT_MS + KILL_GRACE_MS + SIGKILL_SETTLE_MS, TASKKILL_TIMEOUT_MS) + CLOSE_GRACE_MS;
 
 const execFileAsync = promisify(execFile);
+
+/** A null-prototype copy of an environment's own entries. */
+function ownEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const copy: NodeJS.ProcessEnv = Object.create(null);
+  for (const key of Object.keys(env)) copy[key] = env[key];
+  return copy;
+}
 
 /**
  * POSIX: the live descendants of `roots`, from one `ps` snapshot. A harness can
@@ -141,37 +155,7 @@ export const runCommand: CommandRunner = (command, options = {}) => {
       return;
     }
 
-    let executable = cmd;
-    let spawnArgs = args;
-    const env = options.env ?? process.env;
-    if (process.platform === "win32") {
-      const launch = resolveWindowsLaunch(cmd, args, env);
-      if ("error" in launch) {
-        resolve({ returncode: 127, stdout: "", stderr: launch.error, timedOut: false, duration: elapsed() });
-        return;
-      }
-      executable = launch.executable;
-      spawnArgs = launch.args;
-    } else {
-      // `spawn` resolves a relative PATH entry, and a relative command such as
-      // `./bin/agent`, against `options.cwd`, while the readiness probe resolves
-      // them against the directory of odw. Run the file that the probe finds, so
-      // both agree. A command that the probe cannot find must not launch at all:
-      // `spawn` would search for it again, relative to the agent workspace.
-      const found = resolveExecutable(cmd, env, process.platform);
-      if (!found) {
-        resolve({
-          returncode: 127,
-          stdout: "",
-          stderr: `failed to launch '${cmd}': not found, or not an executable file, on the PATH of the launch environment`,
-          timedOut: false,
-          duration: elapsed(),
-        });
-        return;
-      }
-      executable = found;
-    }
-
+    // An already-aborted signal starts no process, whatever the lookup would say.
     if (options.signal?.aborted) {
       resolve({
         returncode: -1,
@@ -182,6 +166,63 @@ export const runCommand: CommandRunner = (command, options = {}) => {
         duration: elapsed(),
       });
       return;
+    }
+
+    let executable = cmd;
+    let spawnArgs = args;
+    // Own entries only. `spawn` also sends inherited enumerable properties, so a
+    // polluted Object.prototype would add variables that the policy removed.
+    const env = ownEnv(options.env ?? process.env);
+    const searchEnv = options.searchEnv ? ownEnv(options.searchEnv) : undefined;
+    // A caller that sets `searchEnv` finds a bare command name with it alone. A
+    // miss is a failed launch: `spawn` must not search the child's PATH instead.
+    // Only Windows reads a backslash as a separator. On POSIX it is a normal
+    // character of a file name, so such a name is bare and the host PATH alone
+    // selects it.
+    const bareName = isBareCommand(cmd, process.platform);
+    const found = searchEnv && bareName ? resolveExecutable(cmd, searchEnv, process.platform) : null;
+    if (searchEnv && bareName && !found) {
+      resolve({
+        returncode: 127,
+        stdout: "",
+        stderr: `failed to launch '${cmd}': not found in the PATH of the host environment`,
+        timedOut: false,
+        duration: elapsed(),
+      });
+      return;
+    }
+    if (process.platform === "win32") {
+      const launch = resolveWindowsLaunch(cmd, args, searchEnv ?? env);
+      if ("error" in launch) {
+        resolve({ returncode: 127, stdout: "", stderr: launch.error, timedOut: false, duration: elapsed() });
+        return;
+      }
+      // A relative `PATH` entry resolves against the cwd of odw. `spawn` would
+      // resolve it against `options.cwd`, so give it the absolute path.
+      executable = found ? resolvePath(launch.executable) : launch.executable;
+      spawnArgs = launch.args;
+    } else if (found) {
+      // `spawn` finds a bare command name through the child's PATH. Give it the
+      // path that `searchEnv` found instead.
+      executable = resolvePath(found);
+    } else {
+      // `spawn` resolves a relative PATH entry, and a relative command such as
+      // `./bin/agent`, against `options.cwd`, while the readiness probe resolves
+      // them against the directory of odw. Run the file that the probe finds, so
+      // both agree. A command that the probe cannot find must not launch at all:
+      // `spawn` would search for it again, relative to the agent workspace.
+      const probed = resolveExecutable(cmd, env, process.platform);
+      if (!probed) {
+        resolve({
+          returncode: 127,
+          stdout: "",
+          stderr: `failed to launch '${cmd}': not found, or not an executable file, on the PATH of the launch environment`,
+          timedOut: false,
+          duration: elapsed(),
+        });
+        return;
+      }
+      executable = probed;
     }
 
     // POSIX: the child leads its own process group, so a group signal reaches

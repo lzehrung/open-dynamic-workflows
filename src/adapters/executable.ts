@@ -1,8 +1,6 @@
 import { accessSync, constants, existsSync, readFileSync, statSync } from "node:fs";
 import { delimiter, extname, join, resolve, win32 } from "node:path";
 
-import type { Adapter } from "./types.js";
-
 /**
  * Read one environment variable. Windows ignores the case of a name, but a plain
  * copy of `process.env` keeps the case it was given, for example `Path`. Such an
@@ -137,51 +135,14 @@ export type CommandProbe =
   | { status: "unlaunchable"; problem: string };
 
 /**
- * The environment of an adapter's CLI: the process environment with the
- * adapter's `env` on top. When the adapter has no `env`, the result is
- * `undefined`, and `runCommand` and `probeCommand` use the process environment.
- * `Bridge` launches the CLI with this environment. `listAdapters` checks the CLI
- * with the same environment. So the check and the launch agree.
- *
- * On Windows, a name is one variable whatever its letter case. So each name in
- * the adapter `env` first removes every name that differs from it only in case.
- * Without this, `Path` in the adapter `env` and `PATH` in the host would both
- * stay, and the host value would win. A later name in the adapter `env` replaces
- * an earlier one in the same way. Other platforms match names exactly.
- *
- * `platform` and `host` default to the running platform and `process.env`. Tests
- * pass their own.
- */
-export function adapterLaunchEnv(
-  adapter: Adapter,
-  platform: NodeJS.Platform = process.platform,
-  host: NodeJS.ProcessEnv = process.env,
-): Record<string, string> | undefined {
-  if (!adapter.env) return undefined;
-  const env: Record<string, string> = {};
-  for (const [name, value] of Object.entries(host)) {
-    if (value !== undefined) env[name] = value;
-  }
-  for (const [name, value] of Object.entries(adapter.env)) {
-    if (platform === "win32") {
-      const upper = name.toUpperCase();
-      for (const existing of Object.keys(env)) {
-        if (existing.toUpperCase() === upper) delete env[existing];
-      }
-    }
-    env[name] = value;
-  }
-  return env;
-}
-
-/**
- * Tell whether an adapter command can run in the environment `env`. For an
- * adapter, `env` is its {@link adapterLaunchEnv}, so the answer matches the
- * launch. Every caller that asks "is this CLI installed" uses this one answer,
- * so none of them counts a command that the launch step refuses. Only Windows
- * refuses a command that resolves: there, odw starts only an `.exe` or `.com`
- * file, and a `.cmd` file that is an npm shim that Node can run. It never
- * starts a `.bat` file, a script, or a file with no extension.
+ * Tell whether an adapter command can run. `env` is the environment that finds
+ * the executable: odw uses its own environment for this, so a `PATH` in an
+ * adapter's `env` or `envPolicy` does not change the answer. Every caller that
+ * asks "is this CLI installed" uses this one answer, so none of them counts a
+ * command that the launch step refuses. Only Windows refuses a command that
+ * resolves: there, odw starts only an `.exe` or `.com` file, and a `.cmd` file
+ * that is an npm shim that Node can run. It never starts a `.bat` file, a
+ * script, or a file with no extension.
  */
 export function probeCommand(
   cmd: string,
