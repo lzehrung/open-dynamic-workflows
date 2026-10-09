@@ -42,7 +42,9 @@ other primitive organizes calls to it.
   worktree** of the source repo (default workspace: the source directory
   itself). Needs a repo with at least one commit; the agent sees HEAD without
   uncommitted changes. The worktree is cleaned up after the call and changes
-  are not merged into the source. `agent()` returns only the reply, not a diff
+  are not merged into the source. One exception: when odw ends a call and
+  cannot confirm the agent's process tree is gone, it keeps the worktree and
+  names its path in the error. `agent()` returns only the reply, not a diff
   or a persistent worktree path: include required deliverables in the reply or
   explicitly save them outside the temporary worktree.
 
@@ -60,8 +62,9 @@ parallel(thunks: Array<() => Promise<T>>) -> Promise<Array<T | null>>
 
 Run every zero-arg thunk concurrently and **wait for all of them** (a barrier).
 Results come back in input order; a recoverable failure yields `null` in its
-slot. After all thunks settle, any fatal error is rethrown. Already-running
-agents are not killed by this barrier.
+slot. After all thunks settle, any fatal error is rethrown. The barrier does not
+kill agents that are already running. `odw stop` ends their process trees. The
+run reports stopped only after the tree-end work finishes.
 
 Use `parallel` when the next step needs the entire batch at once — dedup, tally,
 or a synthesis pass over all results.

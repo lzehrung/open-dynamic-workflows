@@ -86,13 +86,24 @@ export interface CliResult {
   stdout: string;
   stderr: string;
   timedOut: boolean;
-  /** Wall-clock seconds the process ran. */
+  /**
+   * Why ODW ended the process: `timeout`, `cancelled` (the caller aborted), or
+   * `output_limit`. Absent when the process ended on its own.
+   */
+  termination?: "timeout" | "cancelled" | "output_limit";
+  /**
+   * Present when odw ended the process: whether it could verify that the whole
+   * tree is gone. `"unverified"` means a detached descendant may still run (a
+   * broken `ps`, a `taskkill` that failed).
+   */
+  treeCleanup?: "verified" | "unverified";
+  /** Wall-clock seconds until the result resolves, including process-tree shutdown. */
   duration: number;
 }
 
-/** True when the process exited cleanly and did not time out. */
+/** True when the process exited cleanly: no timeout, and ODW did not end it. */
 export function cliOk(result: CliResult): boolean {
-  return result.returncode === 0 && !result.timedOut;
+  return result.returncode === 0 && !result.timedOut && result.termination === undefined;
 }
 
 /** The label to show for an adapter (its `label`, else its name). */

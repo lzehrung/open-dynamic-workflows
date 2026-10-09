@@ -4,8 +4,12 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
+import { defaultConfig } from "../src/adapters/config.js";
+import type { CliResult } from "../src/adapters/types.js";
+import { Bridge } from "../src/bridge.js";
+import { AdapterExecutionError, RunStopped } from "../src/errors.js";
 import { withWorkspace } from "../src/workspace.js";
 
 function git(dir: string, ...args: string[]): string {
@@ -108,5 +112,124 @@ test("inplace mode runs in the source and yields no diff", async () => {
     assert.equal(out, "");
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- a worktree is kept when a leftover process may still use it ------------------
+
+const stoppedCall = (termination: "cancelled" | "timeout", treeCleanup: "verified" | "unverified"): CliResult => ({
+  returncode: -1,
+  stdout: "",
+  stderr: "",
+  timedOut: termination === "timeout",
+  termination,
+  treeCleanup,
+  duration: 0,
+});
+
+/** Run one worktree-isolated call whose runner reports `result`; return what the call saw and threw. */
+async function stoppedWorktreeCall(
+  src: string,
+  result: CliResult,
+  whileRunning?: (cwd: string) => void,
+): Promise<{ cwd: string; error: unknown }> {
+  const config = defaultConfig();
+  config.settings.defaultAdapter = "claude";
+  let cwd = "";
+  const bridge = new Bridge(config, {
+    source: src,
+    runner: async (_command, options) => {
+      cwd = options?.cwd ?? "";
+      whileRunning?.(cwd);
+      return result;
+    },
+  });
+  const error = await bridge.run({ prompt: "x", isolation: "worktree" }).then(
+    () => null,
+    (err: unknown) => err,
+  );
+  return { cwd, error };
+}
+
+test("retain keeps the worktree after the call and returns its root", async () => {
+  const src = makeRepo();
+  let kept: string | null = null;
+  try {
+    await withWorkspace(src, "worktree", async (ws) => {
+      kept = ws.retain();
+    });
+    assert.ok(kept, "a worktree workspace returns its root");
+    assert.ok(existsSync(join(kept!, "a.txt")), "the kept worktree still has its files");
+    assert.match(git(src, "worktree", "list"), /odw-wt-/);
+    assert.equal(await withWorkspace(src, "inplace", async (ws) => ws.retain()), null);
+  } finally {
+    if (kept) git(src, "worktree", "remove", "--force", kept);
+    rmSync(src, { recursive: true, force: true });
+  }
+});
+
+test("a cancelled call with an unverified process tree keeps its worktree and names it", async () => {
+  const src = makeRepo();
+  let cwd = "";
+  try {
+    const seen = await stoppedWorktreeCall(src, stoppedCall("cancelled", "unverified"));
+    cwd = seen.cwd;
+    assert.ok(seen.error instanceof RunStopped);
+    assert.equal(seen.error.treeCleanup, "unverified");
+    assert.ok(seen.error.message.includes(cwd), "the stop names the kept worktree");
+    // The path is named, but never spliced into a shell command: a directory name
+    // can hold `$(...)` or quotes.
+    assert.ok(seen.error.message.includes("git worktree remove --force"));
+    assert.ok(!seen.error.message.includes(`--force "${cwd}"`) && !seen.error.message.includes(`--force '${cwd}'`));
+    assert.ok(existsSync(cwd), "the worktree is still there");
+  } finally {
+    if (cwd) git(src, "worktree", "remove", "--force", cwd);
+    rmSync(src, { recursive: true, force: true });
+  }
+});
+
+test("a timed-out call with an unverified process tree keeps its worktree and names it", async () => {
+  const src = makeRepo();
+  let cwd = "";
+  try {
+    const seen = await stoppedWorktreeCall(src, stoppedCall("timeout", "unverified"));
+    cwd = seen.cwd;
+    assert.ok(seen.error instanceof AdapterExecutionError);
+    assert.ok(seen.error.message.includes(cwd), "the failure names the kept worktree");
+    assert.ok(existsSync(cwd), "the worktree is still there");
+  } finally {
+    if (cwd) git(src, "worktree", "remove", "--force", cwd);
+    rmSync(src, { recursive: true, force: true });
+  }
+});
+
+test("a stopped call whose process tree is verified gone still removes its worktree", async () => {
+  const src = makeRepo();
+  try {
+    const seen = await stoppedWorktreeCall(src, stoppedCall("cancelled", "verified"));
+    assert.ok(seen.error instanceof RunStopped);
+    assert.equal(seen.error.message, "run was stopped");
+    assert.equal(existsSync(seen.cwd), false, "a verified end leaves nothing behind");
+  } finally {
+    rmSync(src, { recursive: true, force: true });
+  }
+});
+
+test("an unverified stop keeps the worktree before any git step can fail into a removal", async () => {
+  const src = makeRepo();
+  let cwd = "";
+  try {
+    // The agent breaks the worktree's git link, so a later `git diff` would fail.
+    const seen = await stoppedWorktreeCall(src, stoppedCall("timeout", "unverified"), (dir) =>
+      rmSync(join(dir, ".git"), { force: true }),
+    );
+    cwd = seen.cwd;
+    assert.ok(seen.error instanceof AdapterExecutionError, "the call fails as a timeout, not as a git error");
+    assert.ok(seen.error.message.includes(cwd), "the failure names the kept worktree");
+    assert.ok(existsSync(cwd), "the worktree is still there");
+  } finally {
+    if (cwd) rmSync(dirname(cwd), { recursive: true, force: true });
+    git(src, "worktree", "prune");
+    rmSync(src, { recursive: true, force: true });
   }
 });
