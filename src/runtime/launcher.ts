@@ -19,7 +19,7 @@ import { loadWorkflowScript } from "../loader.js";
 import { isSeaBinary } from "../sea.js";
 import { resolveWorkflow } from "../workflows/resolve.js";
 import { RunObserver } from "./run-liveness.js";
-import { RunStore } from "./run-store.js";
+import { PRIVATE_FILE_MODE, RunStore } from "./run-store.js";
 
 export interface StartRunOptions {
   args?: unknown;
@@ -134,7 +134,7 @@ function spawnWorker(store: RunStore, runId: string, source: string): void {
   const workerArgv = isSeaBinary()
     ? ["__worker", store.runDir(runId)]
     : nodeWorkerArgv(store.runDir(runId));
-  const logFd = openSync(store.logPath(runId), "w");
+  const logFd = openSync(store.logPath(runId), "w", PRIVATE_FILE_MODE);
   const failed = (err: Error) => {
     store.writeError(runId, { error: `worker failed to start: ${err.message}` });
     store.updateStatus(runId, { state: "failed" });
@@ -158,7 +158,7 @@ function spawnWorker(store: RunStore, runId: string, source: string): void {
   // A separate, write-once file avoids racing the worker's status updates,
   // and identifies slow-starting workers before their first status write.
   if (child.pid !== undefined) {
-    writeFileSync(join(store.runDir(runId), "worker.pid"), String(child.pid));
+    writeFileSync(join(store.runDir(runId), "worker.pid"), String(child.pid), { mode: PRIVATE_FILE_MODE });
   }
 }
 

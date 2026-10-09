@@ -27,18 +27,22 @@
 
 import {
   appendFileSync,
+  constants,
+  fchmodSync,
   closeSync,
   existsSync,
   fstatSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   readSync,
   renameSync,
   writeFileSync,
 } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 
 import type { EventSink, WorkflowEvent } from "../events.js";
 
@@ -90,6 +94,140 @@ export interface EventsCursor {
 
 const CURSOR_WINDOW_BYTES = 128;
 
+/** Owner-only modes for run data. The umask can only clear more bits. */
+export const PRIVATE_DIR_MODE = 0o700;
+export const PRIVATE_FILE_MODE = 0o600;
+
+/**
+ * Create `dir` (and missing parents) with `PRIVATE_DIR_MODE`, and make an
+ * existing `dir` private too. `mkdir` applies its mode only to new
+ * directories, so an older ODW version can leave a loose mode behind.
+ * Windows ignores POSIX modes, so it skips the `chmod`.
+ *
+ * `dir` is one odw owns: a workflow bucket, a run directory, or `_chat`. On
+ * POSIX odw refuses it when it is not odw's work:
+ * - a symlink: `chmod` would follow it and make the target private, and later
+ *   writes would land there;
+ * - a directory owned by another user, root included: a user could pre-create it
+ *   in a shared root, and `chmod` does not change its owner;
+ * - a path that another user could change under odw: see {@link assertTrustedPath}.
+ * The path is checked even when `dir` does not exist yet: a missing entry can be
+ * raced into a symlink as well. Windows is unchanged: it ignores the modes, and a
+ * junction there is a normal way to place the data.
+ */
+export function assertOwnedDir(dir: string): void {
+  // POSIX only, like the modes. Windows stores use junctions and symlinks on
+  // purpose, and its ACLs do this job.
+  if (process.platform === "win32") return;
+  assertTrustedPath(dirname(dir), dir);
+  try {
+    const entry = lstatSync(dir);
+    if (entry.isSymbolicLink()) {
+      throw new Error(`refusing to use '${dir}': it is a symlink, not a directory odw owns`);
+    }
+    const uid = process.getuid?.();
+    if (uid !== undefined && entry.uid !== uid) {
+      throw new Error(`refusing to use '${dir}': it is owned by another user`);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return; // nothing there yet
+    throw err;
+  }
+}
+
+const MAX_LINK_HOPS = 40;
+
+/**
+ * Walk `path` one component at a time, following a symlink only after checking
+ * it. Node has no `openat`, so later I/O goes by path: the walk makes sure that no
+ * other user can change what that path points to.
+ * - Every directory on the way must be owned by the current user or by root, and
+ *   must not let other users replace its entries (writable by the group or by
+ *   anyone, without the sticky bit). With the sticky bit, or when only the owner
+ *   can write it, an entry cannot be replaced by anyone else. A directory's owner
+ *   can rename any entry in it, sticky bit or not, so it must be trusted.
+ * - Every entry on the way, a symlink included, must be owned by the current user
+ *   or by root: another user's symlink in a shared directory could be re-pointed
+ *   after the check.
+ * A missing component ends the walk: nothing exists below it yet.
+ */
+function assertTrustedPath(path: string, dir: string): void {
+  const uid = process.getuid?.();
+  const trusted = (owner: number): boolean => uid === undefined || owner === uid || owner === 0;
+  const container = (directory: string): void => {
+    const st = lstatSync(directory);
+    if (!trusted(st.uid)) {
+      throw new Error(
+        `refusing to use '${dir}': '${directory}' on its path is owned by another user, who can replace entries in it. ` +
+          "Use a runs root that you own.",
+      );
+    }
+    if ((st.mode & 0o022) !== 0 && (st.mode & 0o1000) === 0) {
+      throw new Error(
+        `refusing to use '${dir}': '${directory}' on its path lets other users replace entries in it. ` +
+          "Make it owner-only (chmod 700), or set the sticky bit (chmod +t).",
+      );
+    }
+  };
+  let remaining = resolve(path).split(sep).filter(Boolean);
+  let current: string = sep;
+  let hops = 0;
+  try {
+    while (remaining.length > 0) {
+      container(current);
+      const name = remaining.shift()!;
+      const next = join(current, name);
+      const entry = lstatSync(next);
+      if (!trusted(entry.uid)) {
+        throw new Error(`refusing to use '${dir}': '${next}' on its path is owned by another user`);
+      }
+      if (entry.isSymbolicLink()) {
+        if (++hops > MAX_LINK_HOPS) throw new Error(`refusing to use '${dir}': too many symlinks on its path`);
+        const target = readlinkSync(next);
+        remaining = [...resolve(current, target).split(sep).filter(Boolean), ...remaining];
+        current = sep;
+        continue;
+      }
+      current = next;
+    }
+    container(current);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return; // nothing exists below this point
+    throw err;
+  }
+}
+
+export function ensurePrivateDir(dir: string): void {
+  // `mkdirSync` follows links on the way, and creates directories in whatever
+  // they point to. Check the part of the path that exists before creating
+  // anything, and again after (what was created, and any swap in between).
+  assertOwnedDir(dir);
+  mkdirSync(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
+  assertOwnedDir(dir);
+  if (process.platform === "win32") return;
+  // Set the mode through a descriptor opened without following links: an entry
+  // that is swapped in after the check cannot be followed. The parent check in
+  // assertOwnedDir already rules out a parent that others can modify, so the
+  // later path writes cannot be redirected either.
+  let fd: number;
+  try {
+    // O_DIRECTORY too: a FIFO swapped in for the directory would block the
+    // open instead of failing it.
+    fd = openSync(dir, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ELOOP" || code === "EMLINK") {
+      throw new Error(`refusing to use '${dir}': it is a symlink, not a directory odw owns`);
+    }
+    throw err;
+  }
+  try {
+    fchmodSync(fd, PRIVATE_DIR_MODE);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function readWindow(fd: number, start: number, length: number): string {
   const buf = Buffer.alloc(length);
   const count = readSync(fd, buf, 0, length, start);
@@ -108,14 +246,26 @@ export class RunStore {
     const runId = newRunId();
     const bucket = bucketFor(input.workflowName, input.inlineSource != null ? "workflow.js" : input.script);
     const dir = join(this.root, bucket, runId);
-    mkdirSync(dir, { recursive: true });
+    // Run data holds args, output, and logs. Keep it private to the owner.
+    // POSIX applies these modes; Windows ignores them.
+    // ODW owns the workflow bucket and the run directory, so both become
+    // private, also when they already exist (an upgrade from an older
+    // version). A private bucket also protects the runs that older versions
+    // created with loose modes inside it. Two limits: (a) a runs root that
+    // already exists keeps its mode, because `runsRoot` can point at a shared
+    // directory that ODW did not create, so the bucket names stay listable;
+    // (b) old flat runs directly under the root (the layout before buckets)
+    // keep their old modes.
+    mkdirSync(this.root, { recursive: true, mode: PRIVATE_DIR_MODE });
+    ensurePrivateDir(join(this.root, bucket));
+    ensurePrivateDir(dir);
     this.dirCache.set(runId, dir);
     let script = input.script;
     if (input.inlineSource != null) {
       // Materialise the inline source before meta.json so a reader never sees a
       // meta that points at a not-yet-written file.
       script = join(dir, "workflow.js");
-      writeFileSync(script, input.inlineSource, "utf8");
+      writeFileSync(script, input.inlineSource, { encoding: "utf8", mode: PRIVATE_FILE_MODE });
     }
     writeJson(join(dir, META), {
       runId,
@@ -364,7 +514,7 @@ export class RunStore {
 export class JsonlSink implements EventSink {
   constructor(private readonly path: string) {}
   emit(ev: WorkflowEvent): void {
-    appendFileSync(this.path, JSON.stringify(ev) + "\n");
+    appendFileSync(this.path, JSON.stringify(ev) + "\n", { mode: PRIVATE_FILE_MODE });
   }
 }
 
@@ -420,7 +570,7 @@ function newRunId(): string {
 
 function writeJson(path: string, payload: unknown): void {
   const tmp = `${path}.${process.pid}.${Math.floor(Math.random() * 1e9).toString(36)}.tmp`;
-  writeFileSync(tmp, JSON.stringify(payload, null, 2), "utf8");
+  writeFileSync(tmp, JSON.stringify(payload, null, 2), { encoding: "utf8", mode: PRIVATE_FILE_MODE });
   renameSync(tmp, path);
 }
 

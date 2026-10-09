@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { assertOwnedDir, ensurePrivateDir, PRIVATE_FILE_MODE } from "./run-store.js";
 
 export type ChatRole = "user" | "assistant" | "tool";
 export type ChatSessionState = "running" | "idle" | "done";
@@ -265,6 +266,17 @@ export class ChatStore {
   }
 
   private read(): ChatFile {
+    // Reads must refuse a symlinked `_chat` too, not only writes.
+    const dir = dirname(this.file);
+    assertOwnedDir(dir);
+    // An absent `_chat` ends the read: there is nothing to read, and a later file
+    // check could follow a symlink that another user created in the meantime.
+    // A read creates nothing.
+    if (!existsSync(dir)) return { version: STORAGE_VERSION, sessions: [] };
+    // An existing `_chat` from an older version can be loose. Make it private at
+    // the read boundary too, so a server that only lists sessions does not leave
+    // transcripts readable.
+    ensurePrivateDir(dir);
     if (!existsSync(this.file)) return { version: STORAGE_VERSION, sessions: [] };
     try {
       const parsed = JSON.parse(readFileSync(this.file, "utf8")) as unknown;
@@ -280,9 +292,14 @@ export class ChatStore {
   }
 
   private write(data: ChatFile): void {
-    mkdirSync(dirname(this.file), { recursive: true });
+    // Chat transcripts are private to the owner. POSIX applies these modes;
+    // Windows ignores them.
+    ensurePrivateDir(dirname(this.file));
     const tmp = `${this.file}.tmp`;
-    writeFileSync(tmp, JSON.stringify(data, null, 2), "utf8");
+    // `mode` applies only when the write creates the file. Remove a stale temp
+    // file (for example, a loose-mode one left by a crash) so it cannot be reused.
+    rmSync(tmp, { force: true });
+    writeFileSync(tmp, JSON.stringify(data, null, 2), { encoding: "utf8", mode: PRIVATE_FILE_MODE });
     renameSync(tmp, this.file);
   }
 }
