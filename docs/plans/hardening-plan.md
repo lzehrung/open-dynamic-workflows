@@ -106,14 +106,15 @@ Verification of `hardening/integration` (head `9155822`):
 - Local suite, measured at `400159b` (`9155822` differs by one comment): Windows on Node 22 and on
   Node 24, 418 pass; Linux (WSL, Node 24), 422 pass; 0 failures.
   The Linux suite also passes on two CPUs with six busy loops competing.
-- Real agents, through the built CLI or binary (checked on an earlier head):
-  - Windows: Codex installed by npm ran as `node <script>` and returned non-ASCII text unchanged;
-    omp with an `allowlist` did not see a host variable that `inherit` passed; `odw stop` ended omp
-    and its PowerShell tool in about 1 s; Chat Host ran a real Codex turn to completion.
-  - Linux (WSL): omp with an `allowlist` did not see a host variable that `inherit` passed;
-    `odw stop` ended omp and its shell tool in under 0.5 s.
-- Repeat the real-agent runs on the final head before the upstream PRs. The last changes
-  (await the tree end, the `.exe` and `.com` rule, the `searchEnv` rule) came after those runs.
+- Real agents on the head `9155822`, through the single-file binary (Windows) and the built CLI (Linux):
+  - Windows: Codex (an npm shim) returned `héllo — 世界 [RUN]` unchanged; omp saw a host variable
+    under `inherit` and did not see it under an `allowlist`; `odw stop` during an omp shell-tool
+    call ended the run in 1.0 s, and the tool process was gone 2.3 s after the stop; a Chat Host
+    turn with Codex finished with the reply `pong`.
+  - Linux (WSL): the same four checks pass; `odw stop` ended the run in 0.4 s, and the tool
+    process was gone at the same moment.
+  - A real-agent run depends on the model. In two Linux runs, omp did not call its shell tool
+    within 90 s. A run that starts the tool by a marker file, not by a process name, is reliable.
 
 What the review rounds found:
 
