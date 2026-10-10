@@ -103,8 +103,8 @@ a PR shows only its own commit, and no PR can change fork `main`:
 Verification of `hardening/integration` (head `9155822`):
 
 - Fork CI passes on Linux (Node 20 and 24), Windows (Node 24), and macOS (Node 24).
-- Local suite, measured at `c941ee9`: Windows on Node 22 and on Node 24, 439 pass; Linux (WSL,
-  Node 24), 453 pass; 0 failures. The Linux suite also passes on two CPUs with six busy loops
+- Local suite, measured at `15d9571`: Windows on Node 22 and on Node 24, 442 pass; Linux (WSL,
+  Node 24), 457 pass; 0 failures. The Linux suite also passes on two CPUs with six busy loops
   competing.
 - Real agents on `9155822` (rounds 3 to 5 are test and guard fixes), through the single-file
   binary (Windows) and the built CLI (Linux):
@@ -212,6 +212,19 @@ What the review rounds found:
   - The README names the resolved Claude projects directory (`$CLAUDE_CONFIG_DIR/projects` when
     set) and says `"all"` covers every project directory under it, not "every repository on the
     machine" (English and zh-CN).
+- Correction: the round 10 review bodies of PRs 4 and 6 still listed open findings that the
+  first read missed (inline comments land after the review). Rounds 11 and 12 fixed them:
+  - PR 4: a signaled process that stays visible is `unverified`; the worktree is kept before any
+    git step, and a failed call computes no diff; the chat shutdown bound derives from the runner
+    (`MAX_TERMINATION_MS`); `Bridge.hasUnverifiedCleanup` reports the worst state across parallel
+    agents.
+  - PR 6: the owner check covers root; a parent that the group or anyone can write (no sticky
+    bit) is refused, also when the entry is missing; reading a loose `_chat` makes it private.
+    A root that an older odw made group-writable needs one `chmod 700`.
+  - PR 3: a missing `PATH` searches no directory on POSIX; POSIX runs the file that the probe
+    finds; a drive-relative shim script (`C:evil.js`) is rejected.
+  - PR 5: `runCommand` sends only own environment entries, so a polluted `Object.prototype`
+    cannot bypass an allowlist.
 - Every review thread on the seven PRs is resolved.
 - CI on the PR branches found flaky tests that the first CI runs on the integration missed:
   - Windows: upstream tests with 5 s or 10 s waits for a real worker (30 s now); a status-write
