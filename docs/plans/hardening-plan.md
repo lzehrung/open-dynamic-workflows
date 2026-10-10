@@ -103,10 +103,11 @@ a PR shows only its own commit, and no PR can change fork `main`:
 Verification of `hardening/integration` (head `9155822`):
 
 - Fork CI passes on Linux (Node 20 and 24), Windows (Node 24), and macOS (Node 24).
-- Local suite, measured at `d0c7ba6`: Windows on Node 22 and on Node 24, 422 pass; Linux (WSL,
-  Node 24), 428 pass; 0 failures. The Linux suite also passes on two CPUs with six busy loops
+- Local suite, measured at `d335064`: Windows on Node 22 and on Node 24, 424 pass; Linux (WSL,
+  Node 24), 432 pass; 0 failures. The Linux suite also passes on two CPUs with six busy loops
   competing.
-- Real agents on the head `9155822`, through the single-file binary (Windows) and the built CLI (Linux):
+- Real agents on `9155822` (rounds 3 and 4 are test and guard fixes), through the single-file
+  binary (Windows) and the built CLI (Linux):
   - Windows: Codex (an npm shim) returned `héllo — 世界 [RUN]` unchanged; omp saw a host variable
     under `inherit` and did not see it under an `allowlist`; `odw stop` during an omp shell-tool
     call ended the run in 1.0 s, and the tool process was gone 2.3 s after the stop; a Chat Host
@@ -145,6 +146,19 @@ What the review rounds found:
     reaches the client, and a character split across request chunks is not corrupted.
   - Items 1, 2, 4: a 10 s worker guard raised to 30 s; README claims about Cursor's `agent.cmd`
     corrected; a leaked test temp directory cleaned up.
+- Copilot round 4 gave 6 new comments. All are fixed:
+  - Item 3: when the tree cannot be listed (a broken `ps`), `runCommand` says so on stderr instead
+    of claiming a clean end. A detached descendant may still run in that case. The `ps` snapshot
+    is force-killed at its bound.
+  - Item 2: the resolver reads `PATH` the way the OS does. An empty entry is the current
+    directory; a missing `PATH` still searches the platform default (`/bin` and `/usr/bin`).
+  - Item 4: `Settings.envPolicy` is optional at the public boundary. A programmatic `Config`
+    without it keeps the inherit default instead of throwing.
+  - Item 5: the symlink rule now covers reads (`ChatStore.read` refuses a linked `_chat`), and the
+    mode is set through a `O_NOFOLLOW` descriptor, so an entry swapped in after the check cannot
+    be followed. A shared, writable runs root can still redirect later path writes: the root must
+    stay owner-only, which is how odw creates it.
+  - Item 1: the blocked-rename test accepts `EPERM`, `EACCES`, and `EBUSY`.
 - CI on the PR branches found flaky tests that the first CI runs on the integration missed:
   - Windows: upstream tests with 5 s or 10 s waits for a real worker (30 s now); a status-write
     test whose reader never paused; a cleanup that hit a just-exited process (retries now); a
@@ -157,7 +171,7 @@ What the review rounds found:
 Open items:
 
 - A third Copilot round has run on the final heads (round 3, 10 comments, all fixed). A round 4
-  has not run on the round-3 heads.
+  has run on the round-3 heads (6 comments, all fixed). A round 5 has not run on the round-4 heads.
 - Minor findings from the last `review-and-correct` round, not fixed: a directory named `node.exe`
   next to an npm shim wins over `node` on `PATH` (item 2).
 - Known limits, documented in the PRs: a workflow that discards an `agent()` promise can finish
