@@ -8,8 +8,8 @@ shell 出去执行一个本地命令，通过 stdin 或一个参数把拼好的 
 
 ## 内置适配器
 
-五个开箱即用、无需配置文件：`codex`、`claude`、`gemini`、`qwen`、`kimi`。它们用各自 CLI
-的非交互模式。
+九个开箱即用、无需配置文件：`codex`、`claude`、`gemini`、`qwen`、`kimi`、`omp`、`kilo`、
+`opencode` 和 `cursor`。它们用各自 CLI 的非交互模式。
 
 ### 权限：每个内置适配器能做什么
 
@@ -37,6 +37,17 @@ shell 出去执行一个本地命令，通过 stdin 或一个参数把拼好的 
 
 一种实用的最小权限分工：让 `claude` 写代码（acceptEdits）、让 `codex` 运行/验证
 （workspace-write 沙箱）——见 `examples/codex-claude-loop.js`。
+
+其他内置适配器带有以下权限参数。每个参数允许什么，由对应的 CLI 决定：
+
+| 内置适配器 | 权限参数 |
+| --- | --- |
+| `gemini` | `--approval-mode auto_edit` |
+| `qwen` | `--approval-mode auto-edit` |
+| `kimi` | 无(`odw init` 显示 `no permission flags found; behavior not verified`) |
+| `omp` | `--approval-mode yolo` |
+| `kilo`、`opencode` | `--auto` |
+| `cursor` | `--force --trust` |
 
 ## 配置文件
 
@@ -106,7 +117,7 @@ shell 出去执行一个本地命令，通过 stdin 或一个参数把拼好的 
 | --- | --- |
 | `{prompt}` | 完整拼好的 prompt（独立性引导语 + 任务 + 任何 schema 指令） |
 | `{prompt_file}` | 存放 prompt 的临时文件路径（仅在被引用时才写） |
-| `{workspace}` | agent 运行所在的目录（`copy` 模式下是一个隔离副本） |
+| `{workspace}` | agent 运行所在的目录：源目录；调用设置了 `isolation: "worktree"` 时是一个临时 git worktree |
 | `{source}` | 原始的工作树 |
 | `{adapter}` / `{role}` | 适配器的名字 / 标签 |
 

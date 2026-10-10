@@ -6,8 +6,9 @@ prompt via stdin or an argument and reading the reply from stdout.
 
 ## Built-in adapters
 
-Five ship out of the box, usable with no config file: `codex`, `claude`,
-`gemini`, `qwen`, `kimi`. They use each CLI's non-interactive mode.
+Nine ship out of the box, usable with no config file: `codex`, `claude`,
+`gemini`, `qwen`, `kimi`, `omp`, `kilo`, `opencode`, and `cursor`. They use each
+CLI's non-interactive mode.
 
 ### Permissions: what each built-in may do
 
@@ -40,6 +41,18 @@ equally privileged:
 A useful minimal-privilege split: let `claude` write code (acceptEdits) and let
 `codex` run/verify it (workspace-write sandbox) — see
 `examples/codex-claude-loop.js`.
+
+The other built-ins carry these permission flags. Each CLI defines what its
+flags allow:
+
+| Built-in | Permission flags |
+| --- | --- |
+| `gemini` | `--approval-mode auto_edit` |
+| `qwen` | `--approval-mode auto-edit` |
+| `kimi` | none (`odw init` shows `no permission flags found; behavior not verified`) |
+| `omp` | `--approval-mode yolo` |
+| `kilo`, `opencode` | `--auto` |
+| `cursor` | `--force --trust` |
 
 ## Config file
 
@@ -111,7 +124,7 @@ Expanded in `command` and `stdin` before each call:
 | --- | --- |
 | `{prompt}` | the full composed prompt (independence framing + task + any schema instruction) |
 | `{prompt_file}` | path to a temp file holding the prompt (written only when referenced) |
-| `{workspace}` | the directory the agent runs in (an isolated copy in `copy` mode) |
+| `{workspace}` | the directory the agent runs in: the source directory, or a temporary git worktree when the call sets `isolation: "worktree"` |
 | `{source}` | the original working tree |
 | `{adapter}` / `{role}` | the adapter's name / label |
 

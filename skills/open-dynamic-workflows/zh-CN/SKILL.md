@@ -101,7 +101,9 @@ odw list                    # 所有运行
 
 ## 适配器
 
-Codex、Claude Code、Gemini、Qwen、Kimi 开箱即用，无需配置。要换默认 CLI、调旗标或
+九个 CLI 开箱即用，无需配置：Codex、Claude Code、Gemini、Qwen、Kimi、Oh My Pi（`omp`）、
+Kilo Code、OpenCode 和 Cursor。每个内置适配器的权限级别各不相同，运行前请先看
+[权限说明](references/adapters.md#权限每个内置适配器能做什么)。要换默认 CLI、调旗标或
 接入自定义 CLI 时，读 [`references/adapters.md`](references/adapters.md)，写一个
 `odw.config.json`（放在项目根或 `~/.config/odw/config.json`，或用 `--config` 指定）。
 

@@ -253,6 +253,48 @@ The supported primitive names do not guarantee full runtime parity.
 that does not provide it. Recoverable `null` results require an explicit choice:
 accept a partial result, retry, or fail when the task requires every item.
 
+## Security
+
+- Workflow scripts run as JavaScript in the ODW process, with your user's
+  permissions. Run trusted scripts only. Validation and portability warnings are
+  not a sandbox. Review agent-generated scripts before you run them.
+- Each party owns a different part of the boundary:
+
+  | Owner | Responsibility |
+  | --- | --- |
+  | ODW | Process limits, server ingress, accurate docs |
+  | Harness (the agent CLI) | Tool permissions, sandboxing, approvals, authentication |
+  | Deployment | Containment: container, VM, OS account, filesystem, network |
+
+- Each built-in adapter has a different permission posture. See
+  [Permissions](skills/open-dynamic-workflows/references/adapters.md#permissions-what-each-built-in-may-do).
+  `odw init --check` shows what the command flags declare. It does not verify
+  behavior. A command with no recognized permission flag (for example `kimi`)
+  shows `no permission flags found; behavior not verified`.
+- `isolation: "worktree"` isolates edits from your working tree. It is not a
+  security boundary: absolute paths and symlinks can reach outside it.
+- Every agent CLI inherits the full environment of the `odw` process.
+- The `gemini` and `qwen` built-ins pass the prompt as a command-line argument.
+  Other local users can see it in the process list. The other built-ins use
+  stdin.
+- The runs root (`~/.odw/runs` by default) holds workflow arguments, agent
+  output, worker logs, and Chat Host transcripts (`_chat/sessions.json`). Treat
+  it as sensitive.
+- `odw serve` binds 127.0.0.1 by default. ODW treats only `127.0.0.1`,
+  `localhost`, and `::1` as loopback. Any other `--host` counts as non-loopback,
+  even `127.0.0.2`. With a non-loopback `--host`, anyone who can reach the port
+  can read runs, workflow sources, chat transcripts, and settings (adapter
+  command lines and local paths) without authentication. Adapter command lines
+  can hold sensitive values. Writes are refused.
+  - "Runs" is two lists. ODW keeps its own runs root, and it also reads Claude
+    Code runs from the Claude projects directory: `~/.claude/projects`, or
+    `$CLAUDE_CONFIG_DIR/projects` when that variable is set. `claudeJobsScope`
+    defaults to `"all"`, so the Claude side covers every project directory
+    under it, not only the served repository: run metadata, the author log
+    lines, and the final result. Not raw agent transcripts. Set
+    `claudeJobsScope: "project"` to narrow it to the served repository and its
+    worktrees.
+
 ## Run and observe
 
 In an interactive terminal, `odw run` attaches a **live foreground view** — every
