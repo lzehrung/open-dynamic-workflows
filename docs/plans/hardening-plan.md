@@ -103,8 +103,8 @@ a PR shows only its own commit, and no PR can change fork `main`:
 Verification of `hardening/integration` (head `9155822`):
 
 - Fork CI passes on Linux (Node 20 and 24), Windows (Node 24), and macOS (Node 24).
-- Local suite, measured at `ba8a91d`: Windows on Node 22 and on Node 24, 433 pass; Linux (WSL,
-  Node 24), 444 pass; 0 failures. The Linux suite also passes on two CPUs with six busy loops
+- Local suite, measured at `9ae51d8`: Windows on Node 22 and on Node 24, 437 pass; Linux (WSL,
+  Node 24), 448 pass; 0 failures. The Linux suite also passes on two CPUs with six busy loops
   competing.
 - Real agents on `9155822` (rounds 3 to 5 are test and guard fixes), through the single-file
   binary (Windows) and the built CLI (Linux):
