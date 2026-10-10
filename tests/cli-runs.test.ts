@@ -144,8 +144,8 @@ test("R7: rerun starts a fresh run with the same script + args", async () => {
     assert.deepEqual(store.readMeta(newId).args, { k: 7 }, "same args");
     assert.equal(store.readMeta(newId).script, store.readMeta(runId).script, "same script");
     await Promise.all([
-      waitFor(store, runId, { timeoutMs: 5_000, pollIntervalMs: 20 }),
-      waitFor(store, newId, { timeoutMs: 5_000, pollIntervalMs: 20 }),
+      waitFor(store, runId, { timeoutMs: 30_000, pollIntervalMs: 20 }),
+      waitFor(store, newId, { timeoutMs: 30_000, pollIntervalMs: 20 }),
     ]);
   } finally {
     rmSync(tmp, { recursive: true, force: true });

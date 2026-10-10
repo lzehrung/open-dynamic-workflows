@@ -179,7 +179,7 @@ test("startRunFromSource archives the script in the run dir and runs it", async 
     assert.equal(readFileSync(archived, "utf8"), source, "source archived verbatim");
     assert.equal(meta.origin, "inline-test");
     assert.equal(meta.workflowName, "inline-wf");
-    const status = await waitFor(store, runId, { timeoutMs: 10000 });
+    const status = await waitFor(store, runId, { timeoutMs: 30_000 });
     assert.equal(status.state, "done");
     assert.equal(store.readResult(runId), 42);
   } finally {
@@ -208,7 +208,7 @@ test("startRunFromSource with allowInvalid records the failure as a run", async 
       runsRoot: join(root, "runs"),
       allowInvalid: true,
     });
-    const status = await waitFor(store, runId, { timeoutMs: 10000 });
+    const status = await waitFor(store, runId, { timeoutMs: 30_000 });
     assert.equal(status.state, "failed");
     assert.match(String(store.readError(runId)?.error), /export const meta/);
   } finally {
@@ -223,10 +223,10 @@ test("rerun semantics: an inline run's archived script is independently runnable
       "export const meta = { name: 'inline-wf', description: 'd' }\nreturn 7\n",
       { source: root, runsRoot: join(root, "runs") },
     );
-    await waitFor(store, runId, { timeoutMs: 10000 });
+    await waitFor(store, runId, { timeoutMs: 30_000 });
     const script = store.readMeta(runId).script as string;
     const { runId: again } = startRun(script, { source: root, runsRoot: join(root, "runs") });
-    const status = await waitFor(store, again, { timeoutMs: 10000 });
+    const status = await waitFor(store, again, { timeoutMs: 30_000 });
     assert.equal(status.state, "done");
     assert.equal(store.readResult(again), 7);
   } finally {

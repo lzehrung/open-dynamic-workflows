@@ -18,8 +18,9 @@ import type { Config } from "../adapters/types.js";
 import { loadWorkflowScript } from "../loader.js";
 import { isSeaBinary } from "../sea.js";
 import { resolveWorkflow } from "../workflows/resolve.js";
-import { RunObserver } from "./run-liveness.js";
+import { RunObserver, workerPid } from "./run-liveness.js";
 import { RunStore } from "./run-store.js";
+import { isProcessAlive } from "./runs-view.js";
 
 export interface StartRunOptions {
   args?: unknown;
@@ -125,6 +126,15 @@ export function startRunFromSource(
   return { runId, store };
 }
 
+/**
+ * Pids of the workers that this process started and that have not exited.
+ * On Windows, a pid probe can report a worker as gone before the system has
+ * released its working directory and its log file. The child's `exit` event
+ * fires after the process handle closes, so a caller that waits for it can then
+ * remove them.
+ */
+const liveWorkers = new Set<number>();
+
 function spawnWorker(store: RunStore, runId: string, source: string): void {
   // How the worker is launched depends on how *we* were launched. As a normal
   // Node process, `execPath` is `node` and we hand it `worker.js`. As a compiled
@@ -154,6 +164,11 @@ function spawnWorker(store: RunStore, runId: string, source: string): void {
     closeSync(logFd); // the child holds its own dup'd descriptors; don't leak ours
   }
   child.once("error", failed);
+  if (child.pid !== undefined) {
+    const pid = child.pid;
+    liveWorkers.add(pid);
+    child.once("exit", () => liveWorkers.delete(pid));
+  }
   child.unref();
   // A separate, write-once file avoids racing the worker's status updates,
   // and identifies slow-starting workers before their first status write.
@@ -190,7 +205,13 @@ function tsxLoaderArgv(): string[] {
   return out;
 }
 
-/** Block until the run reaches a terminal state (or times out); return status. */
+/** Upper limit for the worker to exit after the run reaches a terminal state. */
+const WORKER_EXIT_WAIT_MS = 5_000;
+
+/**
+ * Block until the run reaches a terminal state (or times out); return status.
+ * After a terminal state, also wait (briefly) until the worker process exits.
+ */
 export async function waitFor(
   store: RunStore,
   runId: string,
@@ -203,7 +224,25 @@ export async function waitFor(
   const observer = new RunObserver(store, runId);
   for (;;) {
     const observed = observer.read();
-    if (observed.terminal) return observed.status;
+    if (observed.terminal) {
+      // The terminal status is the last write of the worker, not its exit. On
+      // Windows, a live worker holds its cwd (the source directory) and
+      // worker.log. Wait for the exit, so that the caller can remove them.
+      const pid = workerPid(store, runId, observed.status);
+      if (pid !== null && pid !== process.pid) {
+        // The caller's timeout still bounds the whole call.
+        const exitDeadline = Math.min(Date.now() + WORKER_EXIT_WAIT_MS, deadline ?? Infinity);
+        for (
+          let left = exitDeadline - Date.now();
+          (liveWorkers.has(pid) || isProcessAlive(pid)) && left > 0;
+          left = exitDeadline - Date.now()
+        ) {
+          // Never sleep past the deadline: the caller's timeout bounds the call.
+          await new Promise<void>((r) => setTimeout(r, Math.min(poll, 50, left)));
+        }
+      }
+      return observed.status;
+    }
     if (observed.error) return { ...observed.status, state: "failed", error: observed.error };
     if (deadline !== null && Date.now() >= deadline) return observed.status;
     await new Promise<void>((r) => setTimeout(r, poll));
