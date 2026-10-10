@@ -199,8 +199,9 @@ What the review rounds found:
     cannot keep the server from closing.
 - Two comments were the same gap. It is fixed: `CliResult.treeCleanup` (`verified` | `unverified`)
   is machine-readable now. `Bridge` carries it on `RunStopped`, the worker writes it into
-  `status.json` and the `run_stopped` event, and the Chat Host failure text carries it. The one
-  part left out: `withWorkspace` still cleans up a worktree whose tree end was `unverified`.
+  `status.json` and the `run_stopped` event, and the Chat Host failure text carries it. A call
+  whose tree end was `unverified` keeps its worktree (`Workspace.retain()`), and the error names
+  the path; a verified end still removes it.
 - Copilot round 9 fixed the last two documentation gaps: the READMEs now state that
   `claudeJobsScope` defaults to `"all"` (a non-loopback bind exposes Claude Code runs from
   `~/.claude/projects` for every repository) and that `"project"` narrows it. Every review thread
