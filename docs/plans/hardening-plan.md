@@ -103,9 +103,9 @@ a PR shows only its own commit, and no PR can change fork `main`:
 Verification of `hardening/integration` (head `9155822`):
 
 - Fork CI passes on Linux (Node 20 and 24), Windows (Node 24), and macOS (Node 24).
-- Local suite, measured at `400159b` (`9155822` differs by one comment): Windows on Node 22 and on
-  Node 24, 418 pass; Linux (WSL, Node 24), 422 pass; 0 failures.
-  The Linux suite also passes on two CPUs with six busy loops competing.
+- Local suite, measured at `d0c7ba6`: Windows on Node 22 and on Node 24, 422 pass; Linux (WSL,
+  Node 24), 428 pass; 0 failures. The Linux suite also passes on two CPUs with six busy loops
+  competing.
 - Real agents on the head `9155822`, through the single-file binary (Windows) and the built CLI (Linux):
   - Windows: Codex (an npm shim) returned `héllo — 世界 [RUN]` unchanged; omp saw a host variable
     under `inherit` and did not see it under an `allowlist`; `odw stop` during an omp shell-tool
@@ -134,6 +134,17 @@ What the review rounds found:
   - Item 5: ODW sets its own directories to 0700 also on upgrade. It leaves an existing runs root.
   - Item 6: the warning names the three loopback hosts. Other spellings fail closed.
   - Item 7: the "no permission flag" fallback no longer claims the note was declared.
+- Copilot round 3 gave 10 new comments on the final heads. All are fixed:
+  - Item 3: the `ps` snapshot is force-killed at its bound (a wedged `ps` cannot hang a tree end),
+    and the output cap cuts at a UTF-8 character boundary (no U+FFFD past the cap).
+  - Item 5: a workflow bucket, run directory, or `_chat` that is already a symlink is refused;
+    `chmod` would follow it and make the target private, and later writes would land there.
+  - Item 6: a read is passive on a non-loopback bind. The chat reads appended a run result and
+    could start a Codex turn; the same sync also ran on the 1 s tick, so a non-loopback `odw serve`
+    would start turns with no request at all. All three sites are gated. The over-cap 400 now
+    reaches the client, and a character split across request chunks is not corrupted.
+  - Items 1, 2, 4: a 10 s worker guard raised to 30 s; README claims about Cursor's `agent.cmd`
+    corrected; a leaked test temp directory cleaned up.
 - CI on the PR branches found flaky tests that the first CI runs on the integration missed:
   - Windows: upstream tests with 5 s or 10 s waits for a real worker (30 s now); a status-write
     test whose reader never paused; a cleanup that hit a just-exited process (retries now); a
@@ -145,10 +156,10 @@ What the review rounds found:
 
 Open items:
 
-- A third Copilot round has not run on the final heads.
+- A third Copilot round has run on the final heads (round 3, 10 comments, all fixed). A round 4
+  has not run on the round-3 heads.
 - Minor findings from the last `review-and-correct` round, not fixed: a directory named `node.exe`
-  next to an npm shim wins over `node` on `PATH` (item 2); the output cap can be exceeded by the
-  replacement characters of a split UTF-8 sequence (item 3, in code that upstream already has).
+  next to an npm shim wins over `node` on `PATH` (item 2).
 - Known limits, documented in the PRs: a workflow that discards an `agent()` promise can finish
   before that call's process tree is gone; a PID reused inside one poll interval (about 50 ms) can
   receive the `SIGKILL` of the tree end; `odw serve` counts only `127.0.0.1`, `localhost`, and
