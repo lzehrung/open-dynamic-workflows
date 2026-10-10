@@ -103,8 +103,8 @@ a PR shows only its own commit, and no PR can change fork `main`:
 Verification of `hardening/integration` (head `9155822`):
 
 - Fork CI passes on Linux (Node 20 and 24), Windows (Node 24), and macOS (Node 24).
-- Local suite, measured at `f222b49`: Windows on Node 22 and on Node 24, 432 pass; Linux (WSL,
-  Node 24), 443 pass; 0 failures. The Linux suite also passes on two CPUs with six busy loops
+- Local suite, measured at `ba8a91d`: Windows on Node 22 and on Node 24, 433 pass; Linux (WSL,
+  Node 24), 444 pass; 0 failures. The Linux suite also passes on two CPUs with six busy loops
   competing.
 - Real agents on `9155822` (rounds 3 to 5 are test and guard fixes), through the single-file
   binary (Windows) and the built CLI (Linux):
@@ -197,10 +197,14 @@ What the review rounds found:
     waits, so trailing output is kept.
   - Item 3: the chat shutdown waits with a 5 s bound, so a custom runner that ignores the abort
     cannot keep the server from closing.
-- Two comments are the same known gap, not fixed: the unverified-cleanup note stays on
-  `cli.stderr`. The proposal on the PR threads is an optional `CliResult.treeCleanup`
-  (`verified` | `unverified`) carried into `status.json` and into the chat failure text, and
-  `withWorkspace` refusing to clean up the worktree when it is `unverified`.
+- Two comments were the same gap. It is fixed: `CliResult.treeCleanup` (`verified` | `unverified`)
+  is machine-readable now. `Bridge` carries it on `RunStopped`, the worker writes it into
+  `status.json` and the `run_stopped` event, and the Chat Host failure text carries it. The one
+  part left out: `withWorkspace` still cleans up a worktree whose tree end was `unverified`.
+- Copilot round 9 fixed the last two documentation gaps: the READMEs now state that
+  `claudeJobsScope` defaults to `"all"` (a non-loopback bind exposes Claude Code runs from
+  `~/.claude/projects` for every repository) and that `"project"` narrows it. Every review thread
+  on the seven PRs is resolved.
 - CI on the PR branches found flaky tests that the first CI runs on the integration missed:
   - Windows: upstream tests with 5 s or 10 s waits for a real worker (30 s now); a status-write
     test whose reader never paused; a cleanup that hit a just-exited process (retries now); a
@@ -212,10 +216,9 @@ What the review rounds found:
 
 Open items:
 
-- Copilot rounds 3 to 8 ran on the successive heads (10, 6, 7, 4, 4, and 5 comments). Everything
-  is fixed except two documented limits (the daemonization case, and the cleanup signal staying on
-  `stderr` instead of a machine-readable field). Further rounds keep finding deeper edge cases;
-  the last one added no security-class finding.
+- Copilot rounds 3 to 9 ran on the successive heads (10, 6, 7, 4, 4, 5, and 2 comments). Every
+  finding is fixed and every review thread on the seven PRs is resolved. The last two rounds added
+  no security-class finding.
 - Minor findings from the last `review-and-correct` round, not fixed: none. (The `node.exe`
   directory case it listed is fixed in round 8.)
 - Known limits, documented in the PRs: a workflow that discards an `agent()` promise can finish
