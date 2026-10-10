@@ -103,7 +103,7 @@ a PR shows only its own commit, and no PR can change fork `main`:
 Verification of `hardening/integration` (head `9155822`):
 
 - Fork CI passes on Linux (Node 20 and 24), Windows (Node 24), and macOS (Node 24).
-- Local suite, measured at `9ae51d8`: Windows on Node 22 and on Node 24, 437 pass; Linux (WSL,
+- Local suite, measured at `cda815d`: Windows on Node 22 and on Node 24, 437 pass; Linux (WSL,
   Node 24), 448 pass; 0 failures. The Linux suite also passes on two CPUs with six busy loops
   competing.
 - Real agents on `9155822` (rounds 3 to 5 are test and guard fixes), through the single-file
@@ -202,10 +202,15 @@ What the review rounds found:
   `status.json` and the `run_stopped` event, and the Chat Host failure text carries it. A call
   whose tree end was `unverified` keeps its worktree (`Workspace.retain()`), and the error names
   the path; a verified end still removes it.
-- Copilot round 9 fixed the last two documentation gaps: the READMEs now state that
-  `claudeJobsScope` defaults to `"all"` (a non-loopback bind exposes Claude Code runs from
-  `~/.claude/projects` for every repository) and that `"project"` narrows it. Every review thread
-  on the seven PRs is resolved.
+- Copilot round 9 fixed the last two documentation gaps: the READMEs state that `claudeJobsScope`
+  defaults to `"all"` and that `"project"` narrows it.
+- Copilot round 10 (on the changed heads of PRs 2 to 5 and 8) gave 3 comments; PRs 2, 3, and 4
+  were clean. All 3 are fixed:
+  - `EnvPolicy` is exported as a type from the root and adapter barrels.
+  - The README names the resolved Claude projects directory (`$CLAUDE_CONFIG_DIR/projects` when
+    set) and says `"all"` covers every project directory under it, not "every repository on the
+    machine" (English and zh-CN).
+- Every review thread on the seven PRs is resolved.
 - CI on the PR branches found flaky tests that the first CI runs on the integration missed:
   - Windows: upstream tests with 5 s or 10 s waits for a real worker (30 s now); a status-write
     test whose reader never paused; a cleanup that hit a just-exited process (retries now); a
@@ -217,9 +222,9 @@ What the review rounds found:
 
 Open items:
 
-- Copilot rounds 3 to 9 ran on the successive heads (10, 6, 7, 4, 4, 5, and 2 comments). Every
-  finding is fixed and every review thread on the seven PRs is resolved. The last two rounds added
-  no security-class finding.
+- Copilot rounds 3 to 10 ran on the successive heads (10, 6, 7, 4, 4, 5, 2, and 3 comments).
+  Every finding is fixed and every review thread on the seven PRs is resolved. The last three
+  rounds added no security-class finding.
 - Minor findings from the last `review-and-correct` round, not fixed: none. (The `node.exe`
   directory case it listed is fixed in round 8.)
 - Known limits, documented in the PRs: a workflow that discards an `agent()` promise can finish
