@@ -103,8 +103,8 @@ a PR shows only its own commit, and no PR can change fork `main`:
 Verification of `hardening/integration` (head `9155822`):
 
 - Fork CI passes on Linux (Node 20 and 24), Windows (Node 24), and macOS (Node 24).
-- Local suite, measured at `9e6e48d`: Windows on Node 22 and on Node 24, 430 pass; Linux (WSL,
-  Node 24), 439 pass; 0 failures. The Linux suite also passes on two CPUs with six busy loops
+- Local suite, measured at `e2b86ca`: Windows on Node 22 and on Node 24, 431 pass; Linux (WSL,
+  Node 24), 442 pass; 0 failures. The Linux suite also passes on two CPUs with six busy loops
   competing.
 - Real agents on `9155822` (rounds 3 to 5 are test and guard fixes), through the single-file
   binary (Windows) and the built CLI (Linux):
@@ -172,6 +172,17 @@ What the review rounds found:
   - Item 5: the symlink refusal is POSIX-only. Windows junctions stay valid storage there.
 - CI on macOS caught one new test that compared `/var` with `/private/var` spellings. It compares
   real paths now.
+- Copilot round 7 gave 4 new comments. Three are fixed:
+  - Item 2: a directory named `tool.exe` or `tool.com` is not launchable (the loose diagnostic
+    lookup can find one, and readiness must not call it ready).
+  - Items 2 and 4: only Windows reads a backslash as a path separator. On POSIX, `foo\bar` is a
+    bare name, so the host `PATH` alone selects it.
+  - Item 5: the no-follow open also passes `O_DIRECTORY`, so a FIFO swapped in for a directory
+    fails the open instead of blocking it.
+- One comment is a documented limit, not fixed: a process that a descendant spawns during
+  shutdown and that outlives its parent chain is out of reach (it is reparented to PID 1, so a
+  parent-link walk cannot find it). Containment would need a process group or session per call,
+  or OS job objects.
 - Copilot round 6 gave 4 new comments. All are fixed:
   - Item 2: a `.cmd` whose script is a rooted path is not an npm shim (the batch file would run it
     under the shim directory, a direct launch the rooted file). Off Windows, readiness needs a real
@@ -190,8 +201,8 @@ What the review rounds found:
 
 Open items:
 
-- Copilot rounds 3 to 6 ran on the successive heads (10, 6, 7, and 4 comments, all fixed). A round
-  7 has not run on the round-6 heads.
+- Copilot rounds 3 to 7 ran on the successive heads (10, 6, 7, 4, and 4 comments; all fixed except
+  one documented limit). A round 8 has been requested on the round-7 heads.
 - Minor findings from the last `review-and-correct` round, not fixed: a directory named `node.exe`
   next to an npm shim wins over `node` on `PATH` (item 2).
 - Known limits, documented in the PRs: a workflow that discards an `agent()` promise can finish
