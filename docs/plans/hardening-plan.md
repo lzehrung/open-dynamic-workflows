@@ -103,8 +103,8 @@ a PR shows only its own commit, and no PR can change fork `main`:
 Verification of `hardening/integration` (head `9155822`):
 
 - Fork CI passes on Linux (Node 20 and 24), Windows (Node 24), and macOS (Node 24).
-- Local suite, measured at `cda815d`: Windows on Node 22 and on Node 24, 437 pass; Linux (WSL,
-  Node 24), 448 pass; 0 failures. The Linux suite also passes on two CPUs with six busy loops
+- Local suite, measured at `c941ee9`: Windows on Node 22 and on Node 24, 439 pass; Linux (WSL,
+  Node 24), 453 pass; 0 failures. The Linux suite also passes on two CPUs with six busy loops
   competing.
 - Real agents on `9155822` (rounds 3 to 5 are test and guard fixes), through the single-file
   binary (Windows) and the built CLI (Linux):
@@ -156,8 +156,9 @@ What the review rounds found:
     without it keeps the inherit default instead of throwing.
   - Item 5: the symlink rule now covers reads (`ChatStore.read` refuses a linked `_chat`), and the
     mode is set through a `O_NOFOLLOW` descriptor, so an entry swapped in after the check cannot
-    be followed. A shared, writable runs root can still redirect later path writes: the root must
-    stay owner-only, which is how odw creates it.
+    be followed. Round 11 closes the shared-root race: odw refuses a directory that another user
+    owns, and one whose parent lets any user replace entries (world-writable without the sticky
+    bit). Owner-only, group-writable, and sticky parents are accepted.
   - Item 1: the blocked-rename test accepts `EPERM`, `EACCES`, and `EBUSY`.
 - Copilot round 5 gave 7 new comments. All are fixed:
   - Item 2: the resolver returns absolute paths and skips a directory that shares a command's name,
@@ -195,8 +196,9 @@ What the review rounds found:
   - Item 3: a terminated call no longer waits forever on `close` when a descendant holds the
     inherited pipes. A 2 s bound after the child exits finishes the call. A normal call still
     waits, so trailing output is kept.
-  - Item 3: the chat shutdown waits with a 5 s bound, so a custom runner that ignores the abort
-    cannot keep the server from closing.
+  - Item 3: the chat shutdown waits with a bound, so a custom runner that ignores the abort
+    cannot keep the server from closing. Round 11 derives it from the runner (`MAX_TERMINATION_MS`
+    plus 1 s), so a default Codex turn always ends inside it.
 - Two comments were the same gap. It is fixed: `CliResult.treeCleanup` (`verified` | `unverified`)
   is machine-readable now. `Bridge` carries it on `RunStopped`, the worker writes it into
   `status.json` and the `run_stopped` event, and the Chat Host failure text carries it. A call
