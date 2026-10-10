@@ -103,10 +103,10 @@ a PR shows only its own commit, and no PR can change fork `main`:
 Verification of `hardening/integration` (head `9155822`):
 
 - Fork CI passes on Linux (Node 20 and 24), Windows (Node 24), and macOS (Node 24).
-- Local suite, measured at `d335064`: Windows on Node 22 and on Node 24, 424 pass; Linux (WSL,
-  Node 24), 432 pass; 0 failures. The Linux suite also passes on two CPUs with six busy loops
+- Local suite, measured at `0a13a7f`: Windows on Node 22 and on Node 24, 427 pass; Linux (WSL,
+  Node 24), 435 pass; 0 failures. The Linux suite also passes on two CPUs with six busy loops
   competing.
-- Real agents on `9155822` (rounds 3 and 4 are test and guard fixes), through the single-file
+- Real agents on `9155822` (rounds 3 to 5 are test and guard fixes), through the single-file
   binary (Windows) and the built CLI (Linux):
   - Windows: Codex (an npm shim) returned `héllo — 世界 [RUN]` unchanged; omp saw a host variable
     under `inherit` and did not see it under an `allowlist`; `odw stop` during an omp shell-tool
@@ -159,6 +159,19 @@ What the review rounds found:
     be followed. A shared, writable runs root can still redirect later path writes: the root must
     stay owner-only, which is how odw creates it.
   - Item 1: the blocked-rename test accepts `EPERM`, `EACCES`, and `EBUSY`.
+- Copilot round 5 gave 7 new comments. All are fixed:
+  - Item 2: the resolver returns absolute paths and skips a directory that shares a command's name,
+    so an agent's workspace cwd cannot re-resolve the command and a directory no longer wins over a
+    real executable in a later entry. `resolveAdapter` names a CLI in its fix only when that CLI is
+    installed.
+  - Item 3: the output cap keeps a whole trailing character (the first fix dropped one and produced
+    U+FFFD past the cap). The `taskkill` fallback reports an unverified tree end, like the broken
+    `ps` case.
+  - Item 4: the Chat Host environment is built per turn, so a variable that changes after the
+    server starts still reaches the next launch.
+  - Item 5: the symlink refusal is POSIX-only. Windows junctions stay valid storage there.
+- CI on macOS caught one new test that compared `/var` with `/private/var` spellings. It compares
+  real paths now.
 - CI on the PR branches found flaky tests that the first CI runs on the integration missed:
   - Windows: upstream tests with 5 s or 10 s waits for a real worker (30 s now); a status-write
     test whose reader never paused; a cleanup that hit a just-exited process (retries now); a
@@ -170,8 +183,8 @@ What the review rounds found:
 
 Open items:
 
-- A third Copilot round has run on the final heads (round 3, 10 comments, all fixed). A round 4
-  has run on the round-3 heads (6 comments, all fixed). A round 5 has not run on the round-4 heads.
+- A third Copilot round has run on the final heads (round 3, 10 comments, all fixed). Rounds 4 and
+  5 followed (6 and 7 comments, all fixed). A round 6 has not run on the round-5 heads.
 - Minor findings from the last `review-and-correct` round, not fixed: a directory named `node.exe`
   next to an npm shim wins over `node` on `PATH` (item 2).
 - Known limits, documented in the PRs: a workflow that discards an `agent()` promise can finish
