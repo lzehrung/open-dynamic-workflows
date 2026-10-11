@@ -63,7 +63,7 @@ The key `"*"` sets the default for every variable that is not listed. It is
   must say so.
 - A top-level `env` with the same shape could set a default for all adapters
   later. It is not needed for the first step.
-- Estimate: about 60 lines plus tests. A tested policy implementation exists
+- Estimate: about 80 lines plus tests, patterns included. A tested policy implementation exists
   on the fork (`hardening/integration`, commit `48e555e`), with the same
   semantics in a different shape.
 
