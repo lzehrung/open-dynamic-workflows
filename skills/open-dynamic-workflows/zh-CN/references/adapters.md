@@ -88,7 +88,7 @@ shell 出去执行一个本地命令，通过 stdin 或一个参数把拼好的 
 
 | 键 | 含义 |
 | --- | --- |
-| `defaultAdapter` | 一次调用没指名适配器时用的适配器。未设置时：用唯一配置的那个，或——全新安装下——用 PATH 上唯一真实存在的那个 CLI |
+| `defaultAdapter` | 一次调用没指名适配器时用的适配器。未设置时：用唯一配置的那个，或——全新安装下——用 odw 唯一能找到并能启动的那个 CLI |
 | `concurrency` | 同时运行的 agent CLI 上限；省略则自动（`min(16, cpus-2)`） |
 | `maxAgents` | 单次运行总派发量的硬上限（防失控兜底） |
 | `timeout` | 每个 agent CLI 的超时（秒） |
@@ -123,3 +123,36 @@ shell 出去执行一个本地命令，通过 stdin 或一个参数把拼好的 
 
 只要一个 CLI 能读取 prompt（经 stdin 或一个参数）并把回复打印到 stdout，它就能接入。非零
 退出、超时，或可执行文件缺失，都会表现为一次失败的 agent 调用。
+
+### Windows 启动器
+
+`odw` 不经过 shell 启动 `command` 的第一个词元，所以参数和 stdin 原样送达。它用 CLI
+实际得到的环境中的 `PATH` 和 `PATHEXT` 查找该词元，因此适配器的 `env.PATH` 也算数。
+
+- `.exe` 或 `.com` 文件直接运行。
+- npm shim（`npm install -g` 为 Node CLI 写出的 `.cmd` 文件）以 `node <脚本>` 运行。odw
+  使用 shim 旁边的 `node.exe`，没有时使用 `PATH` 上的。只有整个文件内容都是 npm 会写出的
+  内容时，`.cmd` 文件才算 shim。
+- 其他情况以退出码 127 失败：其他 `.cmd` 和 `.bat` 启动器、`.ps1` 或 `.js` 之类的脚本、
+  没有扩展名的文件。请把 `command` 设为真正的可执行文件，或设为解释器加脚本，例如
+  `["node", "agent.js"]`。
+
+`odw init` 和零配置默认值会把这样的命令视为未安装，`odw init` 会显示原因。
+
+Cursor 的 `agent.cmd` 会启动一个 PowerShell 脚本。请自己调用 PowerShell：
+
+```json
+{
+  "adapters": {
+    "cursor": {
+      "command": ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                  "C:\\Users\\<you>\\AppData\\Local\\cursor-agent\\cursor-agent.ps1",
+                  "--print", "--force", "--trust", "--output-format", "text", "--workspace", "{workspace}"],
+      "stdin": "{prompt}",
+      "flags": { "model": ["--model"] }
+    }
+  }
+}
+```
+
+Windows PowerShell 5.1 会丢掉它传给程序的 `"` 字符和空参数。prompt 走 stdin，所以不受影响。

@@ -8,13 +8,24 @@ import { PassThrough } from "node:stream";
 import { writeDefaultAdapter } from "../src/adapters/config.js";
 import { AdapterNotFound, ConfigError, isFatalError } from "../src/errors.js";
 import { cmdInit, type InitFlags } from "../src/init.js";
+import { CURSOR_AGENT_CMD } from "./windows-launcher-fixtures.js";
 
-/** A temp dir with `bin/` stubs for the given CLIs, plus an isolating config file. */
-function sandbox(clis: string[]): { dir: string; configPath: string; cleanup: () => void } {
+interface Sandbox {
+  dir: string;
+  configPath: string;
+  cleanup: () => void;
+}
+
+/**
+ * A temp dir with `bin/` stubs for the given CLIs, plus an isolating config file.
+ * Windows starts only `.exe` files, so a stub there gets that extension. PATHEXT
+ * lists `.exe` and `.cmd`, so a bare name resolves.
+ */
+function sandbox(clis: string[]): Sandbox {
   const dir = mkdtempSync(join(tmpdir(), "odw-init-"));
   mkdirSync(join(dir, "bin"), { recursive: true });
   for (const name of clis) {
-    const stub = join(dir, "bin", name);
+    const stub = join(dir, "bin", process.platform === "win32" ? `${name}.exe` : name);
     writeFileSync(stub, "#!/bin/sh\n");
     chmodSync(stub, 0o755);
   }
@@ -23,15 +34,29 @@ function sandbox(clis: string[]): { dir: string; configPath: string; cleanup: ()
   const configPath = join(dir, "odw.config.json");
   writeFileSync(configPath, "{}\n");
   const oldPath = process.env.PATH;
+  const oldPathext = process.env.PATHEXT;
   process.env.PATH = join(dir, "bin");
+  process.env.PATHEXT = ".exe;.cmd";
   return {
     dir,
     configPath,
     cleanup: () => {
       process.env.PATH = oldPath;
+      if (oldPathext === undefined) delete process.env.PATHEXT;
+      else process.env.PATHEXT = oldPathext;
       rmSync(dir, { recursive: true, force: true });
     },
   };
+}
+
+/**
+ * A sandbox whose PATH directory holds `files`. `agent.cmd` is Cursor's launcher,
+ * and `claude.exe` stands for a CLI that odw can run.
+ */
+function launcherSandbox(files: Record<string, string>): Sandbox {
+  const sb = sandbox([]);
+  for (const [name, text] of Object.entries(files)) writeFileSync(join(sb.dir, "bin", name), text);
+  return sb;
 }
 
 /** Fake stderr that records everything written. */
@@ -257,6 +282,82 @@ test("init: a configured default whose CLI is missing is NOT an all-clear", asyn
     sb.cleanup();
   }
 });
+
+test(
+  "init: a Windows launcher that odw cannot run shows its problem and is not a default candidate",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const sb = launcherSandbox({ "agent.cmd": CURSOR_AGENT_CMD, "claude.exe": "" });
+    try {
+      const err = sink();
+      const code = await cmdInit({ config: sb.configPath }, { input: sink(), err, env: {} });
+      // claude is the only CLI that can run, so a run resolves to it.
+      assert.equal(code, 0);
+      assert.match(err.text(), /a run resolves to claude — no setup needed/);
+      const cursorRow = err.text().split("\n").find((line) => /\bcursor\b/.test(line));
+      assert.match(cursorRow ?? "", /agent\.cmd' is a batch launcher that odw cannot run/);
+      assert.doesNotMatch(cursorRow ?? "", /not installed/);
+    } finally {
+      sb.cleanup();
+    }
+  },
+);
+
+test(
+  "init --adapter refuses a Windows launcher that odw cannot run, and says why",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const sb = launcherSandbox({ "agent.cmd": CURSOR_AGENT_CMD, "claude.exe": "" });
+    try {
+      const err = sink();
+      const code = await cmdInit({ adapter: "cursor", config: sb.configPath }, { input: sink(), err, env: {} });
+      assert.equal(code, 1);
+      assert.match(err.text(), /odw init: 'cursor' cannot run: .*agent\.cmd' is a batch launcher that odw cannot run/);
+      assert.match(err.text(), /Windows launchers/);
+      assert.match(err.text(), /pick an installed one \(claude\)/);
+      assert.doesNotMatch(err.text(), /is not on PATH/);
+      assert.equal(readFileSync(sb.configPath, "utf8"), "{}\n", "nothing is written");
+    } finally {
+      sb.cleanup();
+    }
+  },
+);
+
+test(
+  "init: a default whose launcher odw cannot run is NOT an all-clear",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const sb = launcherSandbox({ "agent.cmd": CURSOR_AGENT_CMD, "claude.exe": "" });
+    try {
+      writeFileSync(sb.configPath, JSON.stringify({ defaultAdapter: "cursor" }));
+      const err = sink();
+      const code = await cmdInit({ config: sb.configPath }, { input: sink(), err, env: {} });
+      assert.equal(code, 1);
+      assert.match(err.text(), /defaultAdapter "cursor" is set but odw cannot run its CLI: .*batch launcher/);
+      assert.match(err.text(), /odw init --adapter claude/);
+      assert.doesNotMatch(err.text(), /no setup needed|is not on PATH/);
+    } finally {
+      sb.cleanup();
+    }
+  },
+);
+
+test(
+  "init: a launcher that odw cannot run is not reported as a missing CLI",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const sb = launcherSandbox({ "agent.cmd": CURSOR_AGENT_CMD });
+    try {
+      const err = sink();
+      const code = await cmdInit({ config: sb.configPath }, { input: sink(), err, env: {} });
+      assert.equal(code, 1);
+      assert.match(err.text(), /no agent CLI can run — odw cannot launch cursor/);
+      assert.doesNotMatch(err.text(), /no agent CLI found on PATH/);
+    } finally {
+      sb.cleanup();
+    }
+  },
+);
 
 test("init: CI='' (set but empty) counts as NOT CI — the prompt still fires", async () => {
   const sb = sandbox(["claude", "codex"]);

@@ -47,6 +47,7 @@ import {
   resolveClaudeWorkflowsRoot,
   resolveWorkflowsRoot,
 } from "../adapters/config.js";
+import { WINDOWS_LAUNCHERS_DOC } from "../adapters/executable.js";
 import type { Config } from "../adapters/types.js";
 import { DASHBOARD_HTML } from "../dashboard.generated.js";
 import { ClaudeRunSource } from "./claude-run-source.js";
@@ -1006,11 +1007,13 @@ function checkChatRunInputs(
       });
       return null;
     }
-    // A configured-but-not-installed adapter would spawn-ENOENT at the first
-    // dispatch — fail here with an actionable message instead of a dead run.
+    // Fail early, with a clear message, for a configured adapter that cannot run.
     if (!known.installed) {
       sendJson(res, 400, {
-        error: `adapter '${adapter}' is configured but its CLI was not found on PATH`,
+        error:
+          known.launchProblem !== undefined
+            ? `adapter '${adapter}' is configured but odw cannot launch its CLI: ${known.launchProblem}. See ${WINDOWS_LAUNCHERS_DOC}.`
+            : `adapter '${adapter}' is configured but its CLI was not found on PATH`,
       });
       return null;
     }
