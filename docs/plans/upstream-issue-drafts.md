@@ -118,3 +118,28 @@ besides the odw primitives.
   - Deliberate hiding, such as building `"constructor"` from parts, is not
     found. No static check can find it in JavaScript. So the report never says
     "safe". It says what it found, and the fixed last line says what it is not.
+
+**Risk tiers**
+
+| Tier | Names | Meaning |
+| --- | --- | --- |
+| Dynamic code | `eval`, `Function`, `constructor`, `__proto__` | The script builds code at run time. The report cannot say what that code does. |
+| Host access | `process`, `require`, `globalThis`, `global`, top-level `this`, `fetch`, `WebAssembly` | The script reaches the machine or the network directly, not through agents. |
+
+**Enforcement: opt-in, never an interactive prompt**
+
+- Default: report only. `odw run` prints one stderr line when a script has a
+  dynamic-code finding, and the run continues.
+- Opt-in (`"scriptUses": "declared"` in `odw.config.json`): a script must list
+  what it uses in `meta.uses`, for example `uses: ["process"]`. odw refuses to
+  start a script whose report finds an unlisted use, and the error names it.
+  The declaration sits at the top of the script, so a reviewer sees it in a
+  diff.
+- No prompt: odw often runs with no person at the terminal (`--detach`, the
+  worker, agents that call `odw run`, CI). A prompt would hang there or be
+  skipped. A declaration works the same everywhere.
+- Limits: an agent that writes a script can also write `meta.uses`. A script
+  can reach `Function` without any listed name, for example through
+  `Object.getOwnPropertyDescriptor` and a key built from parts. So this mode
+  stops accidents and makes intent visible. It is not a boundary, and the docs
+  must say so.
