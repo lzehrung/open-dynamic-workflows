@@ -85,9 +85,9 @@ a PR shows only its own commit, and no PR can change fork `main`:
 | Item | Branch | Fork PR | Base |
 | --- | --- | --- | --- |
 | 1. Cross-platform CI | `hardening/1-ci` | #2 | `odw-pr/upstream-main` |
-| 2. Windows launch fidelity | `hardening/2-windows-launch` | #3 | `odw-pr/upstream-main` |
-| 3. Process control | `hardening/3-process-control` | #4 | `odw-pr/upstream-main` |
-| 4. Environment policy | `hardening/4-env-policy` | #5 | `odw-pr/4-base` (the other six) |
+| 2. Windows launch fidelity | `hardening/launch-process-env` | #9 (replaces #3) | `odw-pr/upstream-main` |
+| 3. Process control | `hardening/launch-process-env` | #9 (replaces #4) | `odw-pr/upstream-main` |
+| 4. Environment policy | `hardening/launch-process-env` | #9 (replaces #5) | `odw-pr/upstream-main` |
 | 5. Private run data | `hardening/5-private-run-data` | #6 | `odw-pr/upstream-main` |
 | 6. Server | `hardening/6-server` | #7 | `odw-pr/upstream-main` |
 | 7. Security docs | `hardening/7-security-docs` | #8 | `odw-pr/upstream-main` |
@@ -246,14 +246,28 @@ What the review rounds found:
   - Linux: three tests that asserted a marker file stayed absent for 4 to 6 s failed on a starved
     machine. They now check that the descendant is dead when the call resolves.
 
+PR structure after round 14: items 2, 3, and 4 edit `runner.ts`, `bridge.ts`, and `server.ts`
+together, and the rebuilds of the integration branch conflicted in the same launch block every
+time. They are one PR now (#9, three commits on `odw-pr/upstream-main`). #3, #4, and #5 are
+closed; their 59 review threads stay there as history. The slice branches `hardening/2-…`,
+`3-…`, and `4-env-policy` and `hardening/integration` stay as the verified reference.
+
 Open items:
 
+- The review loop ended after round 14 (91 threads on 7 PRs). Rounds kept finding new edge
+  cases, one finding was wrong (`execFile`'s timeout already destroys the capture streams), and
+  each fix added new surface. #9 and #6 get one last review; the rest goes to human review.
+- Follow-up after #8 and #9 both merge: the README Security bullet about the environment should
+  describe `envPolicy`. It is a 7-line change, in commit `48e555e` of `hardening/integration`.
 - Copilot rounds 3 to 10 ran on the successive heads (10, 6, 7, 4, 4, 5, 2, and 3 comments).
   Every finding is fixed and every review thread on the seven PRs is resolved. The last three
   rounds added no security-class finding.
 - Minor findings from the last `review-and-correct` round, not fixed: none. (The `node.exe`
   directory case it listed is fixed in round 8.)
-- Known limits, documented in the PRs: a workflow that discards an `agent()` promise can finish
+- Known limits, documented in the PRs: Node has no `openat`, so run and chat storage still goes
+  by path after the checks (the checks make sure that no other user can change the path); a
+  process in uninterruptible sleep cannot be signaled, and the call then settles as `unverified`;
+  a workflow that discards an `agent()` promise can finish
   before that call's process tree is gone; a PID reused inside one poll interval (about 50 ms) can
   receive the `SIGKILL` of the tree end; `odw serve` counts only `127.0.0.1`, `localhost`, and
   `::1` as loopback.
