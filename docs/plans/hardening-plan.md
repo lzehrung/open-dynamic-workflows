@@ -256,7 +256,11 @@ Open items:
 
 - The review loop ended after round 14 (91 threads on 7 PRs). Rounds kept finding new edge
   cases, one finding was wrong (`execFile`'s timeout already destroys the capture streams), and
-  each fix added new surface. #9 and #6 get one last review; the rest goes to human review.
+  each fix added new surface. #9 and #6 got one last review (3 findings: `envPolicy` in the README
+  configuration section, and the path check before `mkdir`). Both are fixed (#9 at `e859009`, #6
+  at `5eb717d`) and no further round is requested. The rest goes to human review. Local suite at
+  `97a9e17` (items 2 to 4 on `odw-pr/upstream-main`): Windows on Node 22 and on Node 24, 426 pass;
+  Linux (WSL), 436 pass; 0 failures. `hardening/integration` stays at `48e555e` as a reference.
 - Follow-up after #8 and #9 both merge: the README Security bullet about the environment should
   describe `envPolicy`. It is a 7-line change, in commit `48e555e` of `hardening/integration`.
 - Copilot rounds 3 to 10 ran on the successive heads (10, 6, 7, 4, 4, 5, 2, and 3 comments).
