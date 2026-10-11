@@ -35,7 +35,6 @@
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { spawn } from "node:child_process";
 import { mkdirSync, statSync, watch, type FSWatcher } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -47,6 +46,9 @@ import {
   resolveClaudeWorkflowsRoot,
   resolveWorkflowsRoot,
 } from "../adapters/config.js";
+import { buildChildEnv } from "../adapters/env.js";
+import { WINDOWS_LAUNCHERS_DOC } from "../adapters/executable.js";
+import { DEFAULT_MAX_OUTPUT_BYTES, MAX_TERMINATION_MS, runCommand } from "../adapters/runner.js";
 import type { Config } from "../adapters/types.js";
 import { DASHBOARD_HTML } from "../dashboard.generated.js";
 import { ClaudeRunSource } from "./claude-run-source.js";
@@ -94,6 +96,8 @@ export interface ChatTurnRequest {
   session: ChatSessionRecord;
   prompt: string;
   cwd: string;
+  /** Aborts when the server closes. A runner must end its work then. */
+  signal?: AbortSignal;
 }
 
 export type ChatTurnRunner = (req: ChatTurnRequest, onChunk: (chunk: string) => void) => Promise<void>;
@@ -258,7 +262,15 @@ export function startServer(options: ServeOptions): Promise<ServeHandle> {
   ];
   const chat = new ChatStore(store.root, cwd);
   const clients = new Set<ServerResponse>();
-  const chatRuntime = createChatRuntime(options.chatRunner, (sessionId) => broadcastChat(clients, sessionId));
+  const chatRuntime = createChatRuntime(
+    options.chatRunner ??
+      createDefaultChatRunner({
+        timeout: config.settings.timeout ?? undefined,
+        // Per turn: the host environment can change while the server runs.
+        env: () => buildChildEnv(config.settings.envPolicy, undefined, process.env),
+      }),
+    (sessionId) => broadcastChat(clients, sessionId),
+  );
 
   const server = createServer((req, res) => {
     handle(req, res, { sources, store, chat, chatRuntime, clients, cwd, config, configPath, boundHost: host }).catch((err) => {
@@ -309,23 +321,29 @@ export function startServer(options: ServeOptions): Promise<ServeHandle> {
         url: `http://${shown}:${boundPort}`,
         port: boundPort,
         host,
-        close: () => closeServer(server, clients, tick, watcher),
+        close: () => closeServer(server, clients, tick, watcher, chatRuntime),
       });
     });
   });
 }
 
-function closeServer(
+async function closeServer(
   server: Server,
   clients: Set<ServerResponse>,
   tick: NodeJS.Timeout,
   watcher: FSWatcher | null,
+  chatRuntime: ChatRuntime,
 ): Promise<void> {
   clearInterval(tick);
   watcher?.close();
   for (const c of clients) c.end();
   clients.clear();
-  return new Promise<void>((resolve) => server.close(() => resolve()));
+  // Stop listening first, then end the running Codex turns and their process trees.
+  const closed = new Promise<void>((resolve) => server.close(() => resolve()));
+  if (!(await abortChatTurns(chatRuntime))) {
+    process.stderr.write(`[odw: a chat turn did not stop within ${SHUTDOWN_WAIT_MS / 1000} s; its process may still run]\n`);
+  }
+  await closed;
 }
 
 interface HandleContext {
@@ -550,56 +568,107 @@ function wantsOdw(text: string): boolean {
 interface ChatRuntime {
   runner: ChatTurnRunner;
   activeSessions: Set<string>;
+  /**
+   * The running turn of each active session. Aborting `controller` ends its
+   * runner; `done` settles after the turn is recorded in the chat store.
+   */
+  turns: Map<string, { controller: AbortController; done: Promise<void> }>;
+  /** True once the server starts to close. No new turn starts after that. */
+  closing: boolean;
   serverStartedAt: number;
   notify(sessionId: string): void;
 }
 
-function createChatRuntime(runner?: ChatTurnRunner, notify?: (sessionId: string) => void): ChatRuntime {
+
+function createChatRuntime(runner: ChatTurnRunner, notify?: (sessionId: string) => void): ChatRuntime {
   return {
-    runner: runner ?? createDefaultChatRunner(),
+    runner,
     activeSessions: new Set(),
+    turns: new Map(),
+    closing: false,
     serverStartedAt: Math.floor(Date.now() / 1000),
     notify: notify ?? (() => {}),
   };
 }
 
-function createDefaultChatRunner(): ChatTurnRunner {
-  return ({ prompt, cwd }, onChunk) =>
-    new Promise<void>((resolvePromise, reject) => {
-      const child = spawn(
-        "codex",
-        [
-          "exec",
-          "--skip-git-repo-check",
-          "--ephemeral",
-          "--sandbox",
-          "read-only",
-          "--cd",
-          cwd,
-          "--color",
-          "never",
-          "-",
-        ],
-        { cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide: true },
-      );
-      let stderr = "";
-      child.stdout.setEncoding("utf8");
-      child.stderr.setEncoding("utf8");
-      child.stdout.on("data", (chunk) => onChunk(stripAnsi(String(chunk))));
-      child.stderr.on("data", (chunk) => {
-        stderr += stripAnsi(String(chunk));
-      });
-      child.on("error", reject);
-      child.on("close", (code, signal) => {
-        if (code === 0) {
-          resolvePromise();
-          return;
-        }
-        const tail = stderr.trim().slice(-1600);
-        reject(new Error(`codex exited with ${code ?? signal ?? "unknown"}${tail ? `: ${tail}` : ""}`));
-      });
-      child.stdin.end(prompt);
-    });
+/** End every running Codex turn, then wait until each one is recorded. */
+const SHUTDOWN_WAIT_MS = MAX_TERMINATION_MS + 1_000;
+
+/**
+ * Abort every chat turn and wait for them, with a bound: a custom runner that
+ * ignores the signal must not keep the server from closing. Resolves false when
+ * the bound gave up first.
+ */
+async function abortChatTurns(runtime: ChatRuntime): Promise<boolean> {
+  runtime.closing = true;
+  const turns = [...runtime.turns.values()];
+  for (const turn of turns) turn.controller.abort();
+  const settled = Promise.allSettled(turns.map((turn) => turn.done)).then(() => true);
+  const bound = new Promise<boolean>((resolvePromise) => {
+    const timer = setTimeout(() => resolvePromise(false), SHUTDOWN_WAIT_MS);
+    timer.unref?.();
+  });
+  return Promise.race([settled, bound]);
+}
+
+/**
+ * The default chat runner: one `codex exec` call per turn, run through the
+ * shared process runner. The turn gets its timeout, output limit, and
+ * process-tree cleanup, and ends when the turn's signal aborts. `env` is the
+ * whole environment of Codex; omit it to inherit the environment of `odw`. The
+ * environment of `odw` finds the `codex` executable in both cases.
+ */
+export function createDefaultChatRunner(options: {
+  command?: string[];
+  timeout?: number;
+  /**
+   * The environment for the CLI. A factory builds it per turn, so a variable
+   * that changes after the server starts still reaches the next launch.
+   */
+  env?: Record<string, string> | (() => Record<string, string>);
+} = {}): ChatTurnRunner {
+  const command = options.command ?? ["codex"];
+  return async ({ prompt, cwd, signal }, onChunk) => {
+    const env = typeof options.env === "function" ? options.env() : options.env;
+    const result = await runCommand(
+      [
+        ...command,
+        "exec",
+        "--skip-git-repo-check",
+        "--ephemeral",
+        "--sandbox",
+        "read-only",
+        "--cd",
+        cwd,
+        "--color",
+        "never",
+        "-",
+      ],
+      {
+        stdin: prompt,
+        cwd,
+        env,
+        searchEnv: process.env,
+        timeout: options.timeout,
+        signal,
+        onStdout: (chunk) => onChunk(stripAnsi(chunk)),
+      },
+    );
+    // The cleanup state belongs in the failure text: a caller that stores the
+    // message must be able to tell that a descendant may still run.
+    const unverified = result.treeCleanup === "unverified" ? " (its process tree may not be gone)" : "";
+    if (result.termination === "timeout") {
+      throw new Error(`codex timed out after ${options.timeout}s${unverified}`);
+    }
+    if (result.termination === "cancelled") throw new Error(`codex was cancelled${unverified}`);
+    if (result.termination === "output_limit") {
+      throw new Error(`codex output exceeded ${DEFAULT_MAX_OUTPUT_BYTES} bytes${unverified}`);
+    }
+    if (result.returncode !== 0) {
+      const tail = stripAnsi(result.stderr).trim().slice(-1600);
+      throw new Error(`codex exited with ${result.returncode}${tail ? `: ${tail}` : ""}`);
+    }
+  };
 }
 
 function stripAnsi(text: string): string {
@@ -663,7 +732,9 @@ function startChatCodexTurn(
   fallbackCwd: string,
 ): ChatSessionRecord | null {
   const current = chat.get(sessionId);
-  if (!current || hasStreamingAssistant(current) || runtime.activeSessions.has(sessionId)) return current;
+  if (!current || hasStreamingAssistant(current) || runtime.activeSessions.has(sessionId) || runtime.closing) {
+    return current;
+  }
   const withPlaceholder = chat.appendAssistantMessage(sessionId, "", undefined, "streaming");
   runtime.notify(sessionId);
   const placeholder = withPlaceholder.messages[withPlaceholder.messages.length - 1]!;
@@ -683,9 +754,10 @@ function startChatCodexTurn(
   };
 
   runtime.activeSessions.add(sessionId);
-  void Promise.resolve()
+  const controller = new AbortController();
+  const done = Promise.resolve()
     .then(() =>
-      runtime.runner({ session: withPlaceholder, prompt, cwd }, (chunk) => {
+      runtime.runner({ session: withPlaceholder, prompt, cwd, signal: controller.signal }, (chunk) => {
         if (!chunk) return;
         text += chunk;
         queueFlush();
@@ -715,7 +787,9 @@ function startChatCodexTurn(
     })
     .finally(() => {
       runtime.activeSessions.delete(sessionId);
+      runtime.turns.delete(sessionId);
     });
+  runtime.turns.set(sessionId, { controller, done });
   return chat.get(sessionId);
 }
 
@@ -976,11 +1050,15 @@ function checkChatRunInputs(
       });
       return null;
     }
-    // A configured-but-not-installed adapter would spawn-ENOENT at the first
-    // dispatch — fail here with an actionable message instead of a dead run.
+    // A configured adapter that cannot run would spawn-ENOENT (or exit 127) at
+    // the first dispatch — fail here with an actionable message instead of a
+    // dead run.
     if (!known.installed) {
       sendJson(res, 400, {
-        error: `adapter '${adapter}' is configured but its CLI was not found on PATH`,
+        error:
+          known.launchProblem !== undefined
+            ? `adapter '${adapter}' is configured but odw cannot launch its CLI: ${known.launchProblem}. See ${WINDOWS_LAUNCHERS_DOC}.`
+            : `adapter '${adapter}' is configured but its CLI was not found on PATH`,
       });
       return null;
     }

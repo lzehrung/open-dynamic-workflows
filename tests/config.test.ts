@@ -1,19 +1,23 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execPath } from "node:process";
 
 import {
   defaultConfig,
   executableCandidates,
+  listAdapters,
   loadConfig,
   resolveAdapter,
   resolveClaudeWorkflowsRoot,
   resolveConcurrency,
   resolveRunsRoot,
 } from "../src/adapters/config.js";
-import { AdapterNotFound } from "../src/errors.js";
+import { Bridge } from "../src/bridge.js";
+import { AdapterExecutionError, AdapterNotFound } from "../src/errors.js";
+import { CURSOR_AGENT_CMD } from "./windows-launcher-fixtures.js";
 
 test("defaultConfig ships all nine built-in adapters", () => {
   const cfg = defaultConfig();
@@ -273,34 +277,15 @@ test("loadConfig prints config warnings to stderr", () => {
   }
 });
 
-test("resolveAdapter with no default picks the sole adapter whose CLI is installed", () => {
-  const dir = mkdtempSync(join(tmpdir(), "odw-path-"));
-  const oldPath = process.env.PATH;
-  try {
-    mkdirSync(join(dir, "bin"), { recursive: true });
-    const stub = join(dir, "bin", "claude");
-    writeFileSync(stub, "#!/bin/sh\n");
-    chmodSync(stub, 0o755);
-    process.env.PATH = join(dir, "bin");
+test("resolveAdapter with no default picks the sole adapter whose CLI is installed", async () => {
+  await withPathDir(stubs("claude"), () => {
     const cfg = defaultConfig(); // nine builtins, defaultAdapter null
     assert.equal(resolveAdapter(cfg).name, "claude");
-  } finally {
-    process.env.PATH = oldPath;
-    rmSync(dir, { recursive: true, force: true });
-  }
+  });
 });
 
-test("resolveAdapter with no default and several installed CLIs errors with guidance", () => {
-  const dir = mkdtempSync(join(tmpdir(), "odw-path-"));
-  const oldPath = process.env.PATH;
-  try {
-    mkdirSync(join(dir, "bin"), { recursive: true });
-    for (const name of ["claude", "codex"]) {
-      const stub = join(dir, "bin", name);
-      writeFileSync(stub, "#!/bin/sh\n");
-      chmodSync(stub, 0o755);
-    }
-    process.env.PATH = join(dir, "bin");
+test("resolveAdapter with no default and several installed CLIs errors with guidance", async () => {
+  await withPathDir(stubs("claude", "codex"), () => {
     const cfg = defaultConfig();
     assert.throws(
       () => resolveAdapter(cfg),
@@ -314,10 +299,7 @@ test("resolveAdapter with no default and several installed CLIs errors with guid
         /pass --adapter claude to odw run/.test(err.message) &&
         /agent\(prompt, \{ adapter: "claude"/.test(err.message),
     );
-  } finally {
-    process.env.PATH = oldPath;
-    rmSync(dir, { recursive: true, force: true });
-  }
+  });
 });
 
 test("resolveAdapter with no default and no installed CLIs says so", () => {
@@ -335,4 +317,224 @@ test("resolveAdapter with no default and no installed CLIs says so", () => {
     process.env.PATH = oldPath;
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// --- a launcher that odw cannot run is not an installed CLI -------------------
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
+
+/** Remove temp directories. On Windows, a child that just exited can hold its working directory for a moment. */
+function removeDirs(...dirs: string[]): void {
+  for (const dir of dirs) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+}
+
+/**
+ * Stub CLI files for `withPathDir`. Windows starts only `.exe` files, so a stub
+ * there gets that extension.
+ */
+function stubs(...names: string[]): Record<string, string> {
+  return Object.fromEntries(
+    names.map((name) => [process.platform === "win32" ? `${name}.exe` : name, "#!/bin/sh\n"]),
+  );
+}
+
+/**
+ * Run `fn` with the host PATH set to a temp directory, and PATHEXT set to
+ * `.exe;.cmd`. The directory holds `files` (made executable). `fn` gets the
+ * directory, so it can add more files.
+ */
+async function withPathDir(
+  files: Record<string, string>,
+  fn: (dir: string) => void | Promise<void>,
+): Promise<void> {
+  const dir = mkdtempSync(join(tmpdir(), "odw-launcher-"));
+  const oldPath = process.env.PATH;
+  const oldPathext = process.env.PATHEXT;
+  try {
+    for (const [name, text] of Object.entries(files)) {
+      writeFileSync(join(dir, name), text);
+      chmodSync(join(dir, name), 0o755);
+    }
+    process.env.PATH = dir;
+    process.env.PATHEXT = ".exe;.cmd";
+    await fn(dir);
+  } finally {
+    restoreEnv("PATH", oldPath);
+    restoreEnv("PATHEXT", oldPathext);
+    removeDirs(dir);
+  }
+}
+
+test(
+  "a Windows launcher that odw cannot run is not installed, so the default skips it",
+  { skip: process.platform !== "win32" },
+  async () => {
+    // `agent.cmd` is Cursor's PowerShell launcher. `claude.exe` is a real kind of executable.
+    await withPathDir({ "agent.cmd": CURSOR_AGENT_CMD, "claude.exe": "" }, () => {
+      const cfg = defaultConfig();
+      const rows = listAdapters(cfg);
+      const cursor = rows.find((r) => r.name === "cursor")!;
+      assert.equal(cursor.installed, false);
+      assert.match(cursor.launchProblem ?? "", /agent\.cmd' is a batch launcher that odw cannot run$/);
+      const claude = rows.find((r) => r.name === "claude")!;
+      assert.equal(claude.installed, true);
+      assert.equal(claude.launchProblem, undefined);
+      // Only claude can run, so a bare agent() call uses it.
+      assert.equal(resolveAdapter(cfg).name, "claude");
+    });
+  },
+);
+
+test(
+  "resolveAdapter names a launcher that odw cannot run, not a missing CLI",
+  { skip: process.platform !== "win32" },
+  async () => {
+    await withPathDir({ "agent.cmd": CURSOR_AGENT_CMD }, () => {
+      assert.throws(
+        () => resolveAdapter(defaultConfig()),
+        (err: Error) =>
+          err instanceof AdapterNotFound &&
+          /cursor cannot run: .*agent\.cmd' is a batch launcher that odw cannot run/.test(err.message) &&
+          !/none of their CLIs were found on PATH/.test(err.message),
+      );
+    });
+    // Two CLIs can run, so the error lists them, and it still names the launcher that cannot.
+    await withPathDir({ "agent.cmd": CURSOR_AGENT_CMD, "claude.exe": "", "codex.exe": "" }, () => {
+      assert.throws(
+        () => resolveAdapter(defaultConfig()),
+        (err: Error) =>
+          err instanceof AdapterNotFound &&
+          /installed here: claude, codex; cursor cannot run: /.test(err.message) &&
+          /odw init --adapter claude/.test(err.message),
+      );
+    });
+  },
+);
+
+// --- the host PATH finds a CLI, and the env.PATH of an adapter does not -------
+
+/**
+ * Put a CLI that prints `ok` into `dir`. On Windows it is a copy of Node, so the
+ * adapter command must pass `-p 'ok'`. Elsewhere it is a shell script.
+ */
+function writeOkCli(dir: string, name: string): void {
+  if (process.platform === "win32") {
+    copyFileSync(execPath, join(dir, `${name}.exe`));
+    return;
+  }
+  writeFileSync(join(dir, name), "#!/bin/sh\nprintf ok\n");
+  chmodSync(join(dir, name), 0o755);
+}
+
+test("an adapter's own env.PATH does not change where odw finds its CLI", async () => {
+  const alphaDir = mkdtempSync(join(tmpdir(), "odw-alpha-"));
+  const emptyDir = mkdtempSync(join(tmpdir(), "odw-empty-"));
+  const workDir = mkdtempSync(join(tmpdir(), "odw-work-"));
+  try {
+    writeOkCli(alphaDir, "odw-alpha-cli");
+    await withPathDir({}, async (hostDir) => {
+      writeOkCli(hostDir, "odw-beta-cli");
+      const cfg = defaultConfig();
+      cfg.adapters = {
+        // Only the env.PATH of alpha holds the CLI of alpha.
+        alpha: { name: "alpha", command: ["odw-alpha-cli", "-p", "'ok'"], env: { PATH: alphaDir } },
+        // The host PATH holds the CLI of beta, and the env.PATH of beta names an empty directory.
+        beta: { name: "beta", command: ["odw-beta-cli", "-p", "'ok'"], env: { PATH: emptyDir } },
+      };
+      assert.deepEqual(
+        listAdapters(cfg).map((row) => [row.name, row.installed]),
+        [
+          ["alpha", false],
+          ["beta", true],
+        ],
+      );
+      assert.equal(resolveAdapter(cfg).name, "beta");
+      // The launch agrees with the check: alpha fails to launch, and beta runs.
+      const bridge = new Bridge(cfg, { source: workDir });
+      await assert.rejects(
+        () => bridge.run({ prompt: "hi", adapter: "alpha" }),
+        (err: Error) =>
+          err instanceof AdapterExecutionError &&
+          err.message.includes("exited with code 127") &&
+          err.message.includes("failed to launch 'odw-alpha-cli': not found in the PATH of the host environment"),
+      );
+      assert.equal((await bridge.run({ prompt: "hi", adapter: "beta" })).text, "ok");
+    });
+  } finally {
+    removeDirs(alphaDir, emptyDir, workDir);
+  }
+});
+
+test(
+  "a Windows launcher on the host PATH that odw cannot run stays unlaunchable, even when the env.PATH of the adapter holds a real executable",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const exeDir = mkdtempSync(join(tmpdir(), "odw-exe-"));
+    const workDir = mkdtempSync(join(tmpdir(), "odw-work-"));
+    try {
+      // A real executable of the same name, in the env.PATH of the adapter. odw does not look there.
+      writeOkCli(exeDir, "odw-env-agent");
+      await withPathDir({ "odw-env-agent.cmd": CURSOR_AGENT_CMD }, async () => {
+        const cfg = defaultConfig();
+        cfg.adapters = { envagent: { name: "envagent", command: ["odw-env-agent"], env: { PATH: exeDir } } };
+        const [row] = listAdapters(cfg);
+        assert.equal(row!.installed, false);
+        assert.match(row!.launchProblem ?? "", /odw-env-agent\.cmd' is a batch launcher that odw cannot run$/);
+        await assert.rejects(
+          () => new Bridge(cfg, { source: workDir }).run({ prompt: "hi", adapter: "envagent" }),
+          (err: Error) =>
+            err instanceof AdapterExecutionError &&
+            err.message.includes(`failed to launch 'odw-env-agent': ${row!.launchProblem}`),
+        );
+      });
+    } finally {
+      removeDirs(exeDir, workDir);
+    }
+  },
+);
+
+test(
+  "a Windows launcher that only the env.PATH of the adapter holds is not found, so it has no launch problem",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const launcherDir = mkdtempSync(join(tmpdir(), "odw-launcher-"));
+    const workDir = mkdtempSync(join(tmpdir(), "odw-work-"));
+    try {
+      writeFileSync(join(launcherDir, "odw-env-agent.cmd"), CURSOR_AGENT_CMD);
+      await withPathDir({}, async () => {
+        const cfg = defaultConfig();
+        cfg.adapters = { envagent: { name: "envagent", command: ["odw-env-agent"], env: { PATH: launcherDir } } };
+        // odw does not look in the env.PATH of the adapter, so it never reads the launcher.
+        const [row] = listAdapters(cfg);
+        assert.equal(row!.installed, false);
+        assert.equal(row!.launchProblem, undefined);
+        await assert.rejects(
+          () => new Bridge(cfg, { source: workDir }).run({ prompt: "hi", adapter: "envagent" }),
+          (err: Error) =>
+            err instanceof AdapterExecutionError &&
+            err.message.includes("exited with code 127") &&
+            err.message.includes("failed to launch 'odw-env-agent': not found in the PATH of the host environment"),
+        );
+      });
+    } finally {
+      removeDirs(launcherDir, workDir);
+    }
+  },
+);
+
+test("resolveAdapter never names a CLI that cannot run", async () => {
+  await withPathDir({ "agent.cmd": CURSOR_AGENT_CMD }, () => {
+    // Nothing in this PATH can run: cursor's launcher is rejected and the rest are absent.
+    assert.throws(
+      () => resolveAdapter(defaultConfig()),
+      (err: AdapterNotFound) => {
+        assert.ok(!/--adapter \w/.test(err.message), `names a CLI that cannot run: ${err.message}`);
+        assert.match(err.message, /install one of their CLIs/);
+        return true;
+      },
+    );
+  });
 });

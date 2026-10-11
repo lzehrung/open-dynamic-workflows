@@ -30,7 +30,10 @@ export class FileControl implements Control {
     for (;;) {
       const action = this.options.readAction();
       if (action === "stop") {
-        this.report(STOPPED);
+        // Do not publish `stopped` here. An agent that is already running is
+        // still ending its process tree, and `stopped` is terminal: an observer
+        // would return before the tree is gone. The worker reports it once every
+        // agent has settled.
         throw new RunStopped("run was stopped");
       }
       if (action === "pause") {

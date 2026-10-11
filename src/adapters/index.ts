@@ -1,6 +1,6 @@
 /** L1 adapter layer — uniform CLI invocation. */
 
-export type { Adapter, AdapterOutput, Settings, Config, CliResult } from "./types.js";
+export type { Adapter, AdapterOutput, Settings, Config, CliResult, EnvPolicy } from "./types.js";
 export { cliOk, adapterDisplayName } from "./types.js";
 export { expand, expandAll, PLACEHOLDERS } from "./placeholders.js";
 export type { PlaceholderName, PlaceholderContext } from "./placeholders.js";

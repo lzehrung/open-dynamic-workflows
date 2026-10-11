@@ -29,6 +29,16 @@ export type AdapterOutput =
       select: "last";
     };
 
+/**
+ * Which host environment variables an agent CLI receives. `inherit` passes every
+ * variable except the names in `deny`. `allowlist` passes only the names in
+ * `allow`. Names compare without case on Windows and exactly elsewhere. An
+ * adapter's `env` values apply after the policy.
+ */
+export type EnvPolicy =
+  | { mode: "inherit"; deny?: string[] }
+  | { mode: "allowlist"; allow: string[] };
+
 /** How to invoke one coding-agent CLI. */
 export interface Adapter {
   name: string;
@@ -36,8 +46,10 @@ export interface Adapter {
   command: string[];
   /** Optional stdin template (e.g. `"{prompt}"`). */
   stdin?: string;
-  /** Extra environment variables layered over the process environment. */
+  /** Extra environment variables. They apply after {@link Adapter.envPolicy}. */
   env?: Record<string, string>;
+  /** Which host variables this CLI receives; falls back to the run-wide `Settings.envPolicy`. */
+  envPolicy?: EnvPolicy;
   /** Per-call timeout in seconds; falls back to the run-wide setting. */
   timeout?: number;
   /** Human-friendly label for progress display. */
@@ -73,6 +85,13 @@ export interface Settings {
    * broader — it exposes other projects' run names/results on this loopback server.
    */
   claudeJobsScope: "all" | "project";
+  /**
+   * Which host environment variables every agent CLI and Chat Host's Codex
+   * receive. An adapter's own `envPolicy` overrides it for that adapter.
+   * Absent means `{ mode: "inherit" }`: the config loader fills it, and a
+   * programmatic `Config` may leave it out.
+   */
+  envPolicy?: EnvPolicy;
 }
 
 export interface Config {
@@ -86,13 +105,24 @@ export interface CliResult {
   stdout: string;
   stderr: string;
   timedOut: boolean;
-  /** Wall-clock seconds the process ran. */
+  /**
+   * Why ODW ended the process: `timeout`, `cancelled` (the caller aborted), or
+   * `output_limit`. Absent when the process ended on its own.
+   */
+  termination?: "timeout" | "cancelled" | "output_limit";
+  /**
+   * Present when odw ended the process: whether it could verify that the whole
+   * tree is gone. `"unverified"` means a detached descendant may still run (a
+   * broken `ps`, a `taskkill` that failed).
+   */
+  treeCleanup?: "verified" | "unverified";
+  /** Wall-clock seconds until the result resolves, including process-tree shutdown. */
   duration: number;
 }
 
-/** True when the process exited cleanly and did not time out. */
+/** True when the process exited cleanly: no timeout, and ODW did not end it. */
 export function cliOk(result: CliResult): boolean {
-  return result.returncode === 0 && !result.timedOut;
+  return result.returncode === 0 && !result.timedOut && result.termination === undefined;
 }
 
 /** The label to show for an adapter (its `label`, else its name). */
