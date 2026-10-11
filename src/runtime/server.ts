@@ -19,7 +19,7 @@
  * Security: binds 127.0.0.1 by default. The run list aggregates every project's
  * runs (prompts, results) — both ODW's own runs root AND, with the default
  * `claudeJobsScope: "all"`, Claude Code's `~/.claude/projects` across every repo
- * — so exposing it off-loopback is opt-in. The Claude side is strictly read-only
+ * — so a non-loopback bind is opt-in. The Claude side is strictly read-only
  * (control is refused) and surfaces a run's metadata + author `log()` lines +
  * final result, NOT raw agent transcripts; narrow it with `claudeJobsScope:
  * "project"` to the served repo + its worktrees.
@@ -30,8 +30,8 @@
  *   1. writeGuard on every POST: Content-Type must be application/json (kills
  *      CORS "simple requests") and, when an Origin header is present, it must be
  *      same-origin.
- *   2. Host-header allowlist on loopback binds (DNS-rebinding guard, all routes).
- *   3. Off-loopback binds (--host) refuse every write with 409.
+ *   2. On a loopback bind, a Host-header allowlist (DNS-rebinding guard, all routes).
+ *   3. A non-loopback bind refuses every write with 409.
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -67,6 +67,7 @@ import { listWorkflowSummaries, workflowDetail } from "./workflows-view.js";
 export interface ServeOptions {
   store: RunStore;
   port?: number;
+  /** Bind address. Default 127.0.0.1. A non-loopback bind is read-only and has no authentication. */
   host?: string;
   /** Anchors the project-local `.odw/workflows` lookup for /api/workflows. */
   cwd?: string;
@@ -102,11 +103,11 @@ const DEFAULT_PORT = 4317;
 const DEFAULT_HOST = "127.0.0.1";
 const RUN_ID = /^[A-Za-z0-9._-]+$/;
 const CONTROL_ACTIONS = new Set(["pause", "resume", "stop"]);
-/** Body cap for write endpoints; inline scripts are the largest legitimate payload. */
+/** Body cap for write endpoints, in UTF-8 bytes; inline scripts are the largest legitimate payload. */
 const MAX_BODY_BYTES = 512 * 1024;
 
 const CHAT_HOST_WORKFLOW_NAME = "chat-host-bridge";
-const CHAT_HOST_WORKFLOW_SOURCE = `
+export const CHAT_HOST_WORKFLOW_SOURCE = `
 export const meta = {
   name: "${CHAT_HOST_WORKFLOW_NAME}",
   description: "Run a local Chat Host task asynchronously and return its answer.",
@@ -138,9 +139,22 @@ const TERMINAL_RUN_STATES = new Set<RunDisplayState>(["done", "failed", "stopped
 const LOOPBACK_BINDS = new Set(["127.0.0.1", "localhost", "::1"]);
 const LOOPBACK_HOST_NAMES = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
 
-/** Whether the server was bound to a loopback address (the default). */
+/**
+ * Loopback means exactly 127.0.0.1, localhost, or ::1. Other spellings, such as
+ * 127.0.0.2, count as non-loopback: the stricter policy.
+ */
 function isLoopbackBind(host: string): boolean {
   return LOOPBACK_BINDS.has(host);
+}
+
+/** The warning for a non-loopback bind, or null for a loopback one. */
+export function nonLoopbackBindWarning(host: string): string | null {
+  if (isLoopbackBind(host)) return null;
+  return (
+    `odw serve: warning: ${host} is not a loopback host (127.0.0.1, localhost, ::1). ` +
+    "Anyone who can reach this port can read runs, workflow sources, chat transcripts, and settings " +
+    "(adapter commands and local paths), with no authentication. Writes are refused."
+  );
 }
 
 /** The hostname part of a Host header, with any port stripped ([::1]:p safe). */
@@ -189,31 +203,43 @@ function writeGuard(req: IncomingMessage, res: ServerResponse, boundHost: string
 /**
  * Read and JSON-parse a request body. Resolves `undefined` on invalid/empty
  * JSON OR when the body exceeds {@link MAX_BODY_BYTES} (the caller turns that
- * into a 400). Settling exactly once is guaranteed even on `destroy()`, whose
- * abort emits neither `end` nor `error` — a `close` listener catches it, so the
- * awaiting handler never hangs and the oversized buffer is dropped.
+ * into a 400). An over-cap body is drained so the client gets the 400; a client
+ * that sends more than 8 times the cap is disconnected. A `close` listener
+ * settles the promise even on `destroy()`, which emits neither `end` nor `error`.
  */
 function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown> | undefined> {
   return new Promise((resolvePromise) => {
-    let body = "";
+    const chunks: Buffer[] = [];
+    let bytes = 0;
     let settled = false;
+    let overflow = false;
     const settle = (value: Record<string, unknown> | undefined): void => {
       if (settled) return;
       settled = true;
       resolvePromise(value);
     };
-    req.on("data", (chunk) => {
-      if (settled) return;
-      body += chunk;
-      if (body.length > MAX_BODY_BYTES) {
-        settle(undefined); // too large → caller responds 400; stop buffering
-        req.destroy();
+    req.on("data", (chunk: Buffer | string) => {
+      const buf = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk;
+      bytes += buf.length;
+      if (overflow) {
+        // Discard the rest, but do not let a client stream forever.
+        if (bytes > MAX_BODY_BYTES * 8) req.destroy();
+        return;
       }
+      if (bytes > MAX_BODY_BYTES) {
+        overflow = true;
+        chunks.length = 0; // stop buffering
+        settle(undefined); // too large: the caller responds 400, the body drains
+        return;
+      }
+      chunks.push(buf);
     });
     req.on("error", () => settle(undefined));
     req.on("close", () => settle(undefined)); // covers destroy() with no error
     req.on("end", () => {
+      if (overflow) return; // the caller already answered 400
       try {
+        const body = Buffer.concat(chunks, bytes).toString("utf8"); // decode once: no split multi-byte chars
         const parsed = JSON.parse(body || "{}") as unknown;
         settle(
           parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
@@ -276,7 +302,9 @@ export function startServer(options: ServeOptions): Promise<ServeHandle> {
   let watcher: FSWatcher | null = null;
   let lastSig = "";
   const broadcast = (force = false) => {
-    syncCompletedChatRuns(chat, sources, chatRuntime);
+    // The sync is a write (it can append a message and start a Codex turn), so
+    // only a loopback bind runs it.
+    if (isLoopbackBind(host)) syncCompletedChatRuns(chat, sources, chatRuntime);
     if (clients.size === 0) return;
     const runs = allSummaries(sources);
     const sig = JSON.stringify(runs.map((r) => [r.runId, r.state, r.counts, r.progress]));
@@ -350,8 +378,8 @@ async function handle(req: IncomingMessage, res: ServerResponse, ctx: HandleCont
   try {
     // DNS-rebinding guard: on a loopback bind, a browser reaching this server
     // through a hostile DNS name carries that name in Host — refuse it outright
-    // (reads too: the run list is sensitive). Off-loopback binds are explicit
-    // opt-ins to remote reads, so the allowlist does not apply there.
+    // (reads too: the run list is sensitive). Any other bind is an explicit
+    // opt-in to remote reads, so the allowlist does not apply there.
     if (isLoopbackBind(boundHost)) {
       const header = req.headers.host;
       if (header && !LOOPBACK_HOST_NAMES.has(hostHeaderName(header))) {
@@ -385,7 +413,8 @@ async function handle(req: IncomingMessage, res: ServerResponse, ctx: HandleCont
       return;
     }
     if (method === "GET" && path === "/api/chat/sessions") {
-      syncCompletedChatRuns(chat, sources, chatRuntime);
+      // The sync is a write; see the tick in startServer.
+      if (isLoopbackBind(boundHost)) syncCompletedChatRuns(chat, sources, chatRuntime);
       sendJson(
         res,
         200,
@@ -403,7 +432,8 @@ async function handle(req: IncomingMessage, res: ServerResponse, ctx: HandleCont
       const sessionId = decodeURIComponent(chatMatch[1]!);
       const sub = chatMatch[2];
       if (method === "GET" && !sub) {
-        syncCompletedChatRuns(chat, sources, chatRuntime);
+        // The sync is a write; see the tick in startServer.
+        if (isLoopbackBind(boundHost)) syncCompletedChatRuns(chat, sources, chatRuntime);
         const session = chat.get(sessionId);
         if (!session) {
           sendJson(res, 404, { error: `no such chat session: ${sessionId}` });

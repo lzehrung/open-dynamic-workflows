@@ -27,9 +27,12 @@
 
 import {
   appendFileSync,
+  constants,
+  fchmodSync,
   closeSync,
   existsSync,
   fstatSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readdirSync,
@@ -90,6 +93,54 @@ export interface EventsCursor {
 
 const CURSOR_WINDOW_BYTES = 128;
 
+/**
+ * Run data holds prompts, agent output, logs, and chat transcripts. On POSIX it
+ * is readable only by its owner, whatever the umask. Windows ignores these modes.
+ */
+export const PRIVATE_DIR_MODE = 0o700;
+export const PRIVATE_FILE_MODE = 0o600;
+
+/**
+ * POSIX: refuse `dir` if it is a symlink. `dir` is a directory that odw owns (a
+ * workflow bucket, a run directory, or `_chat`), and following a link would
+ * apply odw's mode and writes to the link target. Windows allows links here.
+ */
+export function assertOwnedDir(dir: string): void {
+  if (process.platform === "win32") return;
+  try {
+    if (lstatSync(dir).isSymbolicLink()) {
+      throw new Error(`refusing to use '${dir}': it is a symlink, not a directory odw owns`);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return; // nothing there yet
+    throw err;
+  }
+}
+
+/** Create `dir` owner-only, or make an existing one owner-only (`mkdir` sets the mode of new directories only). */
+export function ensurePrivateDir(dir: string): void {
+  mkdirSync(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
+  assertOwnedDir(dir);
+  if (process.platform === "win32") return;
+  // Open without following links, so a link swapped in after the check fails.
+  // O_DIRECTORY makes a swapped-in FIFO fail instead of blocking.
+  let fd: number;
+  try {
+    fd = openSync(dir, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ELOOP" || code === "EMLINK") {
+      throw new Error(`refusing to use '${dir}': it is a symlink, not a directory odw owns`);
+    }
+    throw err;
+  }
+  try {
+    fchmodSync(fd, PRIVATE_DIR_MODE);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function readWindow(fd: number, start: number, length: number): string {
   const buf = Buffer.alloc(length);
   const count = readSync(fd, buf, 0, length, start);
@@ -108,14 +159,19 @@ export class RunStore {
     const runId = newRunId();
     const bucket = bucketFor(input.workflowName, input.inlineSource != null ? "workflow.js" : input.script);
     const dir = join(this.root, bucket, runId);
-    mkdirSync(dir, { recursive: true });
+    // The bucket and run directory become private, also when an older version
+    // created them. An existing runs root keeps its mode: it may be a shared
+    // directory that odw did not create.
+    mkdirSync(this.root, { recursive: true, mode: PRIVATE_DIR_MODE });
+    ensurePrivateDir(join(this.root, bucket));
+    ensurePrivateDir(dir);
     this.dirCache.set(runId, dir);
     let script = input.script;
     if (input.inlineSource != null) {
       // Materialise the inline source before meta.json so a reader never sees a
       // meta that points at a not-yet-written file.
       script = join(dir, "workflow.js");
-      writeFileSync(script, input.inlineSource, "utf8");
+      writeFileSync(script, input.inlineSource, { encoding: "utf8", mode: PRIVATE_FILE_MODE });
     }
     writeJson(join(dir, META), {
       runId,
@@ -364,7 +420,7 @@ export class RunStore {
 export class JsonlSink implements EventSink {
   constructor(private readonly path: string) {}
   emit(ev: WorkflowEvent): void {
-    appendFileSync(this.path, JSON.stringify(ev) + "\n");
+    appendFileSync(this.path, JSON.stringify(ev) + "\n", { mode: PRIVATE_FILE_MODE });
   }
 }
 
@@ -420,7 +476,7 @@ function newRunId(): string {
 
 function writeJson(path: string, payload: unknown): void {
   const tmp = `${path}.${process.pid}.${Math.floor(Math.random() * 1e9).toString(36)}.tmp`;
-  writeFileSync(tmp, JSON.stringify(payload, null, 2), "utf8");
+  writeFileSync(tmp, JSON.stringify(payload, null, 2), { encoding: "utf8", mode: PRIVATE_FILE_MODE });
   renameSync(tmp, path);
 }
 

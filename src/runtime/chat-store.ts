@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { assertOwnedDir, ensurePrivateDir, PRIVATE_FILE_MODE } from "./run-store.js";
 
 export type ChatRole = "user" | "assistant" | "tool";
 export type ChatSessionState = "running" | "idle" | "done";
@@ -265,6 +266,10 @@ export class ChatStore {
   }
 
   private read(): ChatFile {
+    const dir = dirname(this.file);
+    assertOwnedDir(dir);
+    if (!existsSync(dir)) return { version: STORAGE_VERSION, sessions: [] }; // a read creates nothing
+    ensurePrivateDir(dir); // an older version may have left it readable
     if (!existsSync(this.file)) return { version: STORAGE_VERSION, sessions: [] };
     try {
       const parsed = JSON.parse(readFileSync(this.file, "utf8")) as unknown;
@@ -280,9 +285,11 @@ export class ChatStore {
   }
 
   private write(data: ChatFile): void {
-    mkdirSync(dirname(this.file), { recursive: true });
+    ensurePrivateDir(dirname(this.file));
     const tmp = `${this.file}.tmp`;
-    writeFileSync(tmp, JSON.stringify(data, null, 2), "utf8");
+    // `mode` applies to a new file only, so remove a temp file left by a crash.
+    rmSync(tmp, { force: true });
+    writeFileSync(tmp, JSON.stringify(data, null, 2), { encoding: "utf8", mode: PRIVATE_FILE_MODE });
     renameSync(tmp, this.file);
   }
 }
