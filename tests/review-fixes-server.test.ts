@@ -107,7 +107,7 @@ function mockServerConfig(dir: string): string {
 async function boot(root: string): Promise<{ handle: ServeHandle; store: RunStore }> {
   const configPath = mockServerConfig(root);
   const store = new RunStore(join(root, "runs"));
-  const handle = await startServer({
+  const handle = await startServer({ token: null,
     store,
     port: 0,
     host: "127.0.0.1",
@@ -159,7 +159,7 @@ test("GET /api/capabilities reports writable=false on an off-loopback bind", asy
   const root = mkdtempSync(join(tmpdir(), "odw-rf-"));
   const configPath = mockServerConfig(root);
   const store = new RunStore(join(root, "runs"));
-  const handle = await startServer({ store, port: 0, host: "0.0.0.0", cwd: root, config: loadConfig(configPath), configPath, claudeProjectsRoot: join(root, "no-claude") });
+  const handle = await startServer({ token: null, store, port: 0, host: "0.0.0.0", cwd: root, config: loadConfig(configPath), configPath, claudeProjectsRoot: join(root, "no-claude") });
   try {
     const caps = (await (await fetch(`http://127.0.0.1:${handle.port}/api/capabilities`)).json()) as { writable: boolean };
     assert.equal(caps.writable, false);

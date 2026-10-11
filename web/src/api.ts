@@ -1,8 +1,8 @@
 /**
  * Typed client for the `odw serve` API.
  *
- * Reads are unconditional; chat writes and run control are loopback-only on the
- * server side. Claude-provider runs remain strictly read-only — the server
+ * Every request carries the per-start token from the URL that `odw serve`
+ * printed. Chat writes and run control are loopback-only on the server side. Claude-provider runs remain strictly read-only — the server
  * refuses control for them.
  */
 import type {
@@ -17,8 +17,26 @@ import type {
   WorkflowSummary,
 } from "./types";
 
+/**
+ * The token from the printed URL. It is kept in this tab's sessionStorage, which
+ * is per origin (so per port), and removed from the address bar.
+ */
+export const token: string = (() => {
+  const params = new URLSearchParams(location.search);
+  const fromUrl = params.get("token");
+  if (fromUrl) {
+    sessionStorage.setItem("odw-token", fromUrl);
+    params.delete("token");
+    const query = params.toString();
+    history.replaceState(null, "", location.pathname + (query ? `?${query}` : "") + location.hash);
+  }
+  return sessionStorage.getItem("odw-token") ?? "";
+})();
+
+const auth = { authorization: `Bearer ${token}` };
+
 async function getJSON<T>(url: string): Promise<T> {
-  const r = await fetch(url, { headers: { accept: "application/json" } });
+  const r = await fetch(url, { headers: { accept: "application/json", ...auth } });
   const payload = (await r.json().catch(() => ({}))) as Record<string, unknown>;
   if (!r.ok) throw new Error(String(payload.error ?? `${url} → ${r.status}`));
   return payload as T;
@@ -28,7 +46,7 @@ async function getJSON<T>(url: string): Promise<T> {
 async function postJSON<T>(url: string, body: unknown): Promise<T> {
   const r = await fetch(url, {
     method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json" },
+    headers: { "content-type": "application/json", accept: "application/json", ...auth },
     body: JSON.stringify(body),
   });
   const payload = (await r.json().catch(() => ({}))) as Record<string, unknown>;
@@ -39,7 +57,7 @@ async function postJSON<T>(url: string, body: unknown): Promise<T> {
 async function deleteJSON<T>(url: string): Promise<T> {
   const r = await fetch(url, {
     method: "DELETE",
-    headers: { "content-type": "application/json", accept: "application/json" },
+    headers: { "content-type": "application/json", accept: "application/json", ...auth },
     body: "{}",
   });
   const payload = (await r.json().catch(() => ({}))) as Record<string, unknown>;

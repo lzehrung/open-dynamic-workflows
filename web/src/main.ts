@@ -17,7 +17,7 @@ import { renderJobs } from "./views/jobs";
 import { renderSettings } from "./views/settings";
 import { orderedWorkflows, renderWorkspace, wfKey } from "./views/workspace";
 import type { WorkflowDetail } from "./types";
-import { api } from "./api";
+import { api, token } from "./api";
 import { getLang, setLang, t as tr, type Lang } from "./i18n";
 
 /** Reflect the chosen language on <html lang> (a11y + correct CJK shaping). */
@@ -542,10 +542,21 @@ store.subscribe(render);
 // stream, so a headless capture's virtual clock can settle (an open stream keeps
 // the network "busy" forever). Harmless in normal use — no one passes it.
 const snap = new URLSearchParams(location.search).get("snap") === "1";
-applyDocLang();
-if (!location.hash) location.hash = "#/activity";
-if (!snap) store.connect();
-// Learn whether this dashboard may write (loopback) so write affordances are
-// hidden on a remotely-viewed off-loopback bind rather than failing on click.
-void store.loadCapabilities();
-void store.loadRuns().then(() => enterRoute());
+function boot(): void {
+  applyDocLang();
+  if (!location.hash) location.hash = "#/activity";
+  if (!snap) store.connect();
+  // Learn whether this dashboard may write (loopback) so write affordances are
+  // hidden on a remotely-viewed off-loopback bind rather than failing on click.
+  void store.loadCapabilities();
+  void store.loadRuns().then(() => enterRoute());
+}
+// A tab opened without the token gets 401 everywhere: say what to do instead of
+// showing an empty board. A host that turned the token off still boots.
+if (token) boot();
+else
+  void fetch("/api/capabilities").then((r) => {
+    if (r.status !== 401) return boot();
+    applyDocLang();
+    root.textContent = tr("Open the URL that odw serve printed. It holds this dashboard's access token.");
+  });

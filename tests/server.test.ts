@@ -197,7 +197,7 @@ test("HTTP: serves dashboard, run list, detail, control, and 404s", async () => 
     A("agent_finished", "alpha", "Research", 2, { adapter: "mock", attempts: 1 }),
   ]);
   // Point the Claude source at an empty dir so this test sees only the ODW run.
-  const handle = await startServer({ store, port: 0, host: "127.0.0.1", claudeProjectsRoot: join(root, "no-claude") });
+  const handle = await startServer({ token: null, store, port: 0, host: "127.0.0.1", claudeProjectsRoot: join(root, "no-claude") });
   try {
     const html = await fetch(`${handle.url}/`).then((r) => r.text());
     assert.match(html, /Open Dynamic Workflows/);
@@ -250,7 +250,7 @@ test("HTTP: merges Claude Code runs into /api/runs (read-only: control → 409)"
     join(sess, "wf_abc.json"),
     JSON.stringify({ runId: "wf_abc", status: "completed", workflowName: "cc-job", startTime: 1780000000000, durationMs: 1000, workflowProgress: [] }),
   );
-  const handle = await startServer({ store, port: 0, host: "127.0.0.1", claudeProjectsRoot: projects, claudeJobsScope: "all" });
+  const handle = await startServer({ token: null, store, port: 0, host: "127.0.0.1", claudeProjectsRoot: projects, claudeJobsScope: "all" });
   try {
     const runs = await fetch(`${handle.url}/api/runs`).then((r) => r.json());
     assert.equal(runs.length, 2); // ODW + Claude, merged
@@ -283,7 +283,7 @@ test("HTTP: control endpoint rejects non-JSON and cross-origin (CSRF guard)", as
   const id = seedRun(store, { name: "demo", state: "running", pid: process.pid }, [
     A("agent_started", "alpha", "Research", 1),
   ]);
-  const handle = await startServer({ store, port: 0, host: "127.0.0.1" });
+  const handle = await startServer({ token: null, store, port: 0, host: "127.0.0.1" });
   try {
     // A cross-site "simple request" uses text/plain to skip preflight — reject it.
     const textPlain = await fetch(`${handle.url}/api/runs/${id}/control`, {
@@ -348,7 +348,7 @@ test("HTTP: /api/workflows lists managed-dir workflows + detail with source", as
   const config = defaultConfig();
   config.settings.workflowsRoot = globalWf;
   config.settings.claudeWorkflowsRoot = globalClaudeWf;
-  const handle = await startServer({
+  const handle = await startServer({ token: null,
     store,
     port: 0,
     host: "127.0.0.1",
@@ -407,7 +407,7 @@ test("HTTP: /api/settings exposes the live runtime config summary", async () => 
   config.settings.workflowsRoot = globalWf;
   config.settings.claudeWorkflowsRoot = globalClaudeWf;
   config.settings.defaultAdapter = "codex";
-  const handle = await startServer({
+  const handle = await startServer({ token: null,
     store,
     port: 0,
     host: "127.0.0.1",
@@ -455,7 +455,7 @@ test("HTTP: Chat Host sessions persist messages and link a real ODW run", async 
   config.settings.defaultAdapter = "mock";
   config.settings.workspaceMode = "inplace";
   config.adapters.mock = { name: "mock", command: [execPath, "-e", mockAgent], stdin: "{prompt}" };
-  const handle = await startServer({
+  const handle = await startServer({ token: null,
     store,
     port: 0,
     host: "127.0.0.1",
@@ -522,7 +522,7 @@ test("HTTP: Chat Host ignores negated workflow mentions and deletes sessions", a
   const proj = tempRoot();
   const store = new RunStore(root);
   const prompts: string[] = [];
-  const handle = await startServer({
+  const handle = await startServer({ token: null,
     store,
     port: 0,
     host: "127.0.0.1",
@@ -579,7 +579,7 @@ test("HTTP: Chat Host sidebar summary ignores empty streaming placeholders", asy
   const proj = tempRoot();
   const store = new RunStore(root);
   let release!: () => void;
-  const handle = await startServer({
+  const handle = await startServer({ token: null,
     store,
     port: 0,
     host: "127.0.0.1",

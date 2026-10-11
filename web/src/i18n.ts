@@ -67,6 +67,7 @@ export function t(s: string, vars?: Record<string, string | number>): string {
 // LOG, …) are deliberately NOT translated: they mirror the event names in
 // events.jsonl and read as constants in the monospace event stream.
 const ZH: Record<string, string> = {
+  "Open the URL that odw serve printed. It holds this dashboard's access token.": "请打开 odw serve 打印的 URL,其中带有此仪表盘的访问 token。",
   // Shell — connection, rail nav, status bar.
   Live: "实时",
   "Reconnecting…": "重新连接…",
