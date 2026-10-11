@@ -30,7 +30,8 @@ export class FileControl implements Control {
     for (;;) {
       const action = this.options.readAction();
       if (action === "stop") {
-        this.report(STOPPED);
+        // Do not report `stopped` here: running agents are still ending. The worker
+        // reports it after they settle.
         throw new RunStopped("run was stopped");
       }
       if (action === "pause") {
