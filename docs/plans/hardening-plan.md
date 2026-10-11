@@ -78,6 +78,35 @@ Verified against `main` at `aa1b3d5` (fork plus upstream `16f57ee`).
 
 ## Status
 
+The work is regrouped into three stacked PRs for upstream, previewed in the fork. Each PR's base
+is the previous PR's branch, so a PR shows only its own commits:
+
+| PR | Branch | Contents | Base |
+| --- | --- | --- | --- |
+| #10 | `pr/a-private-data-docs` | Items 6, 5 (core), 7 (without the built-in pin test) | `odw-pr/upstream-main` |
+| #11 | `pr/b-windows` | Items 1, 2 (Windows only) | `pr/a-private-data-docs` |
+| #12 | `pr/c-process-control` | Item 3 (trimmed) | `pr/b-windows` |
+
+- Discarded from the earlier slices:
+  - Item 5: the path-trust walk from rounds 11 to 15. It refused a WSL runs root under `/mnt/c`
+    (DrvFs shows `777`), which works on `main`. Kept: `0700`/`0600` modes, hardening of an existing
+    loose directory (also on a chat read), and the symlink refusal.
+  - Item 2: the POSIX launch rules from rounds 12 to 14. With `env: {}`, `runCommand(["sh", ...])`
+    returned 127 instead of running, as it does on `main`.
+  - Item 3: the hard-stop timer for a child that emits neither `exit` nor `close` (only
+    reproducible with a stubbed `process.kill`), and the forking-`ps` test (that finding was wrong).
+  - Item 7: the exact-value test of every built-in command.
+- Held back: item 4 (`envPolicy`). Upstream declined managed execution policy in #30 as a separate
+  administration contract, and no upstream issue asks for environment filtering. Propose it as an
+  issue first; the code stays on `hardening/integration`.
+- #2 to #9 are closed. The `hardening/*` branches stay as the reference.
+- Local suites, Windows (Node 22 and 24) and Linux (WSL, Node 24), 0 failures: #10 356 tests, #11
+  410, #12 456. Real agents on Windows: Codex through its npm shim returned `héllo — 世界 [RUN]`
+  unchanged (#11); `odw stop` during an omp tool command ended the run in 1.4 s with no tool
+  process left (#12).
+
+Earlier status, kept for the history:
+
 All seven items are implemented as one commit each on `upstream/main` (16f57ee). `hardening/integration`
 holds all seven. Each item has a PR in the fork. The base of each PR is a branch in the fork, so
 a PR shows only its own commit, and no PR can change fork `main`:
