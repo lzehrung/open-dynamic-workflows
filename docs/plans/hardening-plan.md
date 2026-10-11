@@ -86,6 +86,7 @@ is the previous PR's branch, so a PR shows only its own commits:
 | #10 | `pr/a-private-data-docs` | Items 6, 5 (core), 7 (without the built-in pin test) | `odw-pr/upstream-main` |
 | #11 | `pr/b-windows` | Items 1, 2 (Windows only) | `pr/a-private-data-docs` |
 | #12 | `pr/c-process-control` | Item 3 (trimmed) | `pr/b-windows` |
+| #13 | `pr/d-serve-token` | A per-start token for every `odw serve` request | `pr/c-process-control` |
 
 - Discarded from the earlier slices:
   - Item 5: the path-trust walk from rounds 11 to 15. It refused a WSL runs root under `/mnt/c`
