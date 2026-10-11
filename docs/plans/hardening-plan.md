@@ -103,8 +103,8 @@ a PR shows only its own commit, and no PR can change fork `main`:
 Verification of `hardening/integration` (head `9155822`):
 
 - Fork CI passes on Linux (Node 20 and 24), Windows (Node 24), and macOS (Node 24).
-- Local suite, measured at `15d9571`: Windows on Node 22 and on Node 24, 442 pass; Linux (WSL,
-  Node 24), 457 pass; 0 failures. The Linux suite also passes on two CPUs with six busy loops
+- Local suite, measured at `65b3a81`: Windows on Node 22 and on Node 24, 444 pass; Linux (WSL,
+  Node 24), 462 pass; 0 failures. The Linux suite also passes on two CPUs with six busy loops
   competing.
 - Real agents on `9155822` (rounds 3 to 5 are test and guard fixes), through the single-file
   binary (Windows) and the built CLI (Linux):
@@ -225,6 +225,17 @@ What the review rounds found:
     finds; a drive-relative shim script (`C:evil.js`) is rejected.
   - PR 5: `runCommand` sends only own environment entries, so a polluted `Object.prototype`
     cannot bypass an allowlist.
+- Process note: the first read of rounds 12 and 13 missed 8 findings on PR 4, because the REST
+  list of review comments is paginated and the newest ones come last. Later reads use
+  `--paginate` and the open-findings list in each review body. Round 13 fixed them:
+  - PR 4: a call whose direct child had already exited is `unverified`; `runCommand` settles
+    after `MAX_TERMINATION_MS` even when the child emits neither `exit` nor `close`; every
+    terminal state (`done`, `failed`, `stopped`) reports `treeCleanup`; the failure message
+    names an output-limit stop; the recovery command has its target; the shutdown warning
+    derives its duration.
+  - PR 3: a drive-relative command (`C:tool.exe`) is explicit; POSIX resolves a relative command
+    (`./bin/agent`) against the directory of odw, as the probe does.
+  - PR 6: an absent `_chat` ends a read at once; a parent that another user owns is refused.
 - Every review thread on the seven PRs is resolved.
 - CI on the PR branches found flaky tests that the first CI runs on the integration missed:
   - Windows: upstream tests with 5 s or 10 s waits for a real worker (30 s now); a status-write
