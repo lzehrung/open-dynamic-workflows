@@ -25,24 +25,39 @@ Drafts for `xz1220/open-dynamic-workflows`. Not filed yet.
 - The workarounds are weak: `env -u NAME` in `command` works on POSIX only, and
   starting odw from a clean shell removes everything or nothing.
 
-**Proposal (small)**
+**Proposal**
 
-Allow `null` in an adapter's `env` to remove a variable:
+Let an adapter's existing `env` map take a boolean as well as a string:
 
-```json
-{ "adapters": { "codex": { "env": { "AWS_SECRET_ACCESS_KEY": null, "GITHUB_TOKEN": null } } } }
+| Value | Meaning |
+| --- | --- |
+| `"text"` | Set the variable (today's behavior). |
+| `false` | Do not pass the variable. |
+| `true` | Pass the host value. Useful only with `"*": false`. |
+
+The key `"*"` sets the default for every variable that is not listed. It is
+`true` unless set:
+
+```jsonc
+// Remove two secrets, pass the rest:
+"env": { "AWS_SECRET_ACCESS_KEY": false, "GITHUB_TOKEN": false }
+// Pass only what the CLI needs:
+"env": { "*": false, "PATH": true, "HOME": true, "ANTHROPIC_API_KEY": true }
 ```
 
-- It extends an existing field. No new config key, and the default is
-  unchanged.
-- On Windows, names match without case (`Path` = `PATH`).
-- Estimate: about 30 lines plus tests.
-
-**Possible follow-up**
-
-An allowlist mode that passes only the named variables. It is stronger, but
-each CLI then needs its own auth and runtime variables listed. A tested
-implementation exists on the fork (`hardening/integration`, commit `48e555e`).
+- It extends an existing field. No new config key, and existing configs keep
+  working: every value in them is a string.
+- An exact name wins over `"*"`. On Windows, names match without case
+  (`Path` = `PATH`).
+- With `"*": false`, odw still finds the executable with its own `PATH`, so a
+  short list does not stop the launch. The CLI itself may need more variables
+  (for example `USERPROFILE`, `APPDATA`, `SystemRoot` on Windows), and the docs
+  must say so.
+- A top-level `env` with the same shape could set a default for all adapters
+  later. It is not needed for the first step.
+- Estimate: about 60 lines plus tests. A tested policy implementation exists
+  on the fork (`hardening/integration`, commit `48e555e`), with the same
+  semantics in a different shape.
 
 ## 2. Stricter permission defaults for the built-in adapters
 
