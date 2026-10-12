@@ -7,7 +7,7 @@
  * app re-renders the active view. Defensive throughout — a failed fetch never
  * crashes the window, it just leaves the last-known state and flips `conn`.
  */
-import { api } from "./api";
+import { api, token } from "./api";
 import type {
   Capabilities,
   ChatSession,
@@ -62,7 +62,8 @@ class Store {
   connect(): void {
     try {
       this.es?.close();
-      const es = new EventSource("/api/stream");
+      // EventSource cannot set headers, so the stream takes the token in the query.
+      const es = new EventSource(`/api/stream?token=${encodeURIComponent(token)}`);
       this.es = es;
       es.addEventListener("runs", (e) => {
         try {

@@ -238,7 +238,7 @@ ODW 已实现下列原语能力。依赖宿主私有运行机制的脚本,迁移
 提供沙箱。它只用适配器 `command` 中的参数启动 CLI,仅此而已。在自身边界之内,ODW 负责:
 
 - 它启动的进程:超时、输出上限和 `odw stop` 会结束每个 agent 及其启动的所有进程;
-- 它的仪表盘服务:默认只监听 127.0.0.1;
+- 它的仪表盘服务:默认只监听 127.0.0.1,每个 API 请求都需要 `odw serve` 打印的 URL 中的 token;
 - 它保存的运行数据:只有你的用户可以读取;
 - 说明它向每个 CLI 传递了什么。
 
@@ -259,8 +259,8 @@ ODW 已实现下列原语能力。依赖宿主私有运行机制的脚本,迁移
 
 **你的数据会到哪里。**
 
-- `odw serve` 使用 127.0.0.1、localhost、::1 以外的 `--host` 时,任何能访问该端口的人都可以
-  在无认证的情况下读取运行记录、workflow 源码、聊天记录和设置(适配器命令和本地路径)。
+- `odw serve` 使用 127.0.0.1、localhost、::1 以外的 `--host` 时,任何能访问该端口并持有打印出的
+  URL 的人都可以读取运行记录、workflow 源码、聊天记录和设置(适配器命令和本地路径)。流量不加密。
   写操作会被拒绝。
 - 仪表盘还会显示 `~/.claude/projects`(或 `$CLAUDE_CONFIG_DIR/projects`)下所有项目的
   Claude Code 运行。设置 `claudeJobsScope: "project"` 可只显示被服务的仓库。
@@ -309,7 +309,7 @@ odw list
 额外依赖。
 
 ```bash
-odw serve [--open]                      # 实时仪表盘,默认 http://127.0.0.1:4317
+odw serve [--open]                      # 实时仪表盘;打开它打印的 URL(其中带 token)
 odw serve --port 8080 --host 0.0.0.0    # 自定义端口 / 绑定地址
 ```
 
@@ -560,8 +560,10 @@ ODW 也带一个 skill——但 skill 的职责是教你的 agent 写和跑 work
 <details>
 <summary><b>网页能通过 <code>odw serve</code> 驱动我本机的 agent 吗?</b></summary>
 
-不能。写端点要求 <code>Content-Type: application/json</code> 和同源 Origin,Host 头
-有 allowlist 防 DNS rebinding,绑定到非回环地址时写操作一律拒绝(看板仍可读)。
+不能。每个 API 请求都需要 <code>odw serve</code> 打印的 URL 中的 token,看板把它保存在
+标签页的 session storage 中,其他网站和端口都无法读取。写端点还要求
+<code>Content-Type: application/json</code> 和同源 Origin,Host 头有 allowlist 防 DNS
+rebinding,绑定到非回环地址时写操作一律拒绝。
 </details>
 
 <details>

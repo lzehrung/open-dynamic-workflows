@@ -1,12 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { execPath } from "node:process";
 
 import { loadConfig } from "../src/adapters/config.js";
+import { writeOpenFile } from "../src/cli.js";
 import { waitFor } from "../src/runtime/launcher.js";
 import { ChatStore } from "../src/runtime/chat-store.js";
 import { RunStore } from "../src/runtime/run-store.js";
@@ -25,7 +26,7 @@ const tempRoot = () => mkdtempSync(join(tmpdir(), "odw-guards-"));
 async function boot(root: string, host: string): Promise<ServeHandle> {
   const configPath = join(root, "odw.config.json");
   writeFileSync(configPath, JSON.stringify({ workflowsRoot: join(root, "gwf") }));
-  return startServer({
+  return startServer({ token: null,
     store: new RunStore(join(root, "runs")),
     port: 0,
     host,
@@ -137,7 +138,7 @@ test("Chat Host archives the fixed workflow source and ignores client-supplied c
     }),
   );
   const chatRunner: ChatTurnRunner = async (_req, onChunk) => onChunk("mock codex reply");
-  const handle = await startServer({
+  const handle = await startServer({ token: null,
     store,
     port: 0,
     host: "127.0.0.1",
@@ -196,7 +197,8 @@ test("nonLoopbackBindWarning names the host, the accepted hosts, and the exposur
     assert.ok(warning, `expected a warning for ${host}`);
     assert.ok(warning.includes(`warning: ${host} is not a loopback host (127.0.0.1, localhost, ::1)`), `names ${host} and the loopback hosts`);
     assert.match(warning, /settings \(adapter commands and local paths\)/);
-    assert.match(warning, /no authentication/i);
+    assert.match(warning, /has the printed URL/);
+    assert.match(warning, /not encrypted/);
     assert.match(warning, /Writes are refused/);
   }
   for (const host of ["127.0.0.1", "localhost", "::1"]) {
@@ -277,7 +279,7 @@ async function completedChatRun(host: string): Promise<{ resultMessage: boolean;
   };
   const configPath = join(root, "odw.config.json");
   writeFileSync(configPath, JSON.stringify({ workflowsRoot: join(root, "gwf") }));
-  const handle = await startServer({
+  const handle = await startServer({ token: null,
     store,
     port: 0,
     host,
@@ -321,4 +323,74 @@ test("a loopback read reports a finished run to its chat session", async () => {
   const loopback = await completedChatRun("127.0.0.1");
   assert.equal(loopback.resultMessage, true);
   assert.ok(loopback.turns >= 1, "the loopback read did not start the follow-up chat turn");
+});
+
+// --- the per-start token ------------------------------------------------------------
+
+async function bootWithToken(root: string, host: string): Promise<ServeHandle> {
+  const configPath = join(root, "odw.config.json");
+  writeFileSync(configPath, JSON.stringify({ workflowsRoot: join(root, "gwf") }));
+  return startServer({
+    store: new RunStore(join(root, "runs")),
+    port: 0,
+    host,
+    cwd: root,
+    config: loadConfig(configPath),
+    configPath,
+    claudeProjectsRoot: join(root, "no-claude"),
+  });
+}
+
+test("every API request needs the token: as a Bearer header, or in the query for the event stream", async () => {
+  const root = tempRoot();
+  const handle = await bootWithToken(root, "127.0.0.1");
+  try {
+    const token = handle.token!;
+    assert.ok(token.length >= 32, "a random token per start");
+    const base = `http://127.0.0.1:${handle.port}`;
+    // The page is the static client and holds no data.
+    const page = await fetch(`${base}/`);
+    assert.equal(page.status, 200);
+    assert.equal(page.headers.get("set-cookie"), null, "no cookie: it would reach every port on this host");
+    assert.equal((await fetch(`${base}/api/runs`)).status, 401);
+    assert.equal((await fetch(`${base}/api/runs`, { headers: { authorization: "Bearer wrong" } })).status, 401);
+    assert.equal((await fetch(`${base}/api/runs`, { headers: { authorization: `Bearer ${token}` } })).status, 200);
+    // A write without the token is refused before any other check.
+    const post = await fetch(`${base}/api/chat/sessions`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    assert.equal(post.status, 401);
+    // EventSource cannot set headers, so the stream takes the token in the query.
+    assert.equal((await fetch(`${base}/api/stream`)).status, 401);
+    const controller = new AbortController();
+    const stream = await fetch(`${base}/api/stream?token=${token}`, { signal: controller.signal });
+    assert.equal(stream.status, 200);
+    controller.abort();
+  } finally {
+    await handle.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a non-loopback bind also needs the token to read", async () => {
+  const root = tempRoot();
+  const handle = await bootWithToken(root, "0.0.0.0");
+  try {
+    const base = `http://127.0.0.1:${handle.port}`;
+    assert.equal((await fetch(`${base}/api/settings`)).status, 401);
+    assert.equal((await fetch(`${base}/api/settings`, { headers: { authorization: `Bearer ${handle.token}` } })).status, 200);
+  } finally {
+    await handle.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("--open hands the browser a private redirect file, not the token URL", { skip: process.platform === "win32" }, () => {
+  const url = "http://127.0.0.1:4317/?token=abc";
+  const file = writeOpenFile(url);
+  try {
+    assert.equal(statSync(file).mode & 0o777, 0o600, "only the user can read the file");
+    assert.equal(statSync(dirname(file)).mode & 0o777, 0o700, "only the user can list the directory");
+    assert.match(readFileSync(file, "utf8"), /http-equiv="refresh" content="0;url=http:\/\/127\.0\.0\.1:4317\/\?token=abc"/);
+  } finally {
+    rmSync(dirname(file), { recursive: true, force: true });
+  }
 });

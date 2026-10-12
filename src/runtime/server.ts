@@ -24,9 +24,11 @@
  * final result, NOT raw agent transcripts; narrow it with `claudeJobsScope:
  * "project"` to the served repo + its worktrees.
  *
- * Write-path security: POST routes can drive local state, so the realistic
- * threat is a hostile web page reaching loopback through the user's browser,
- * not the local machine (local processes can already run code). Defenses:
+ * Every API request needs the token of this start (see `hasToken`), so other
+ * local users and programs cannot read or drive the server.
+ *
+ * Write-path security: POST routes can drive local state, so a hostile web page
+ * reaching loopback through the user's browser is also a threat. Defenses:
  *   1. writeGuard on every POST: Content-Type must be application/json (kills
  *      CORS "simple requests") and, when an Origin header is present, it must be
  *      same-origin.
@@ -34,6 +36,7 @@
  *   3. A non-loopback bind refuses every write with 409.
  */
 
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { mkdirSync, statSync, watch, type FSWatcher } from "node:fs";
 import { join } from "node:path";
@@ -68,8 +71,13 @@ import { listWorkflowSummaries, workflowDetail } from "./workflows-view.js";
 export interface ServeOptions {
   store: RunStore;
   port?: number;
-  /** Bind address. Default 127.0.0.1. A non-loopback bind is read-only and has no authentication. */
+  /** Bind address. Default 127.0.0.1. A non-loopback bind is read-only. */
   host?: string;
+  /**
+   * The token every API request must carry. Default: a random one per start.
+   * `null` turns the check off, for tests and callers that own the process.
+   */
+  token?: string | null;
   /** Anchors the project-local `.odw/workflows` lookup for /api/workflows. */
   cwd?: string;
   /** Config whose `workflowsRoot` is the global managed dir. Defaults to loadConfig(null). */
@@ -87,6 +95,8 @@ export interface ServeOptions {
 
 export interface ServeHandle {
   url: string;
+  /** The token every API request must carry, or null when the check is off. */
+  token: string | null;
   port: number;
   host: string;
   close(): Promise<void>;
@@ -150,13 +160,27 @@ function isLoopbackBind(host: string): boolean {
   return LOOPBACK_BINDS.has(host);
 }
 
+/** Whether a request carries the token: as `Authorization: Bearer`, or as `?token=` (the event stream). */
+function hasToken(req: IncomingMessage, url: URL, token: string): boolean {
+  const auth = req.headers.authorization;
+  const given = auth?.startsWith("Bearer ") ? auth.slice(7) : url.searchParams.get("token");
+  return given !== null && sameToken(given, token);
+}
+
+/** Compare tokens in constant time. */
+function sameToken(a: string, b: string): boolean {
+  const x = Buffer.from(a);
+  const y = Buffer.from(b);
+  return x.length === y.length && timingSafeEqual(x, y);
+}
+
 /** The warning for a non-loopback bind, or null for a loopback one. */
 export function nonLoopbackBindWarning(host: string): string | null {
   if (isLoopbackBind(host)) return null;
   return (
     `odw serve: warning: ${host} is not a loopback host (127.0.0.1, localhost, ::1). ` +
-    "Anyone who can reach this port can read runs, workflow sources, chat transcripts, and settings " +
-    "(adapter commands and local paths), with no authentication. Writes are refused."
+    "Anyone who can reach this port and has the printed URL can read runs, workflow sources, chat transcripts, " +
+    "and settings (adapter commands and local paths). Traffic is not encrypted. Writes are refused."
   );
 }
 
@@ -173,7 +197,7 @@ function hostHeaderName(header: string): string {
  */
 function writeGuard(req: IncomingMessage, res: ServerResponse, boundHost: string): boolean {
   if (!isLoopbackBind(boundHost)) {
-    sendJson(res, 409, { error: "writes are loopback-only; token auth is a future opt-in" });
+    sendJson(res, 409, { error: "writes are loopback-only" });
     return false;
   }
   // Compare the MIME *essence* (type/subtype before any ";" parameters), not a
@@ -292,8 +316,9 @@ export function startServer(options: ServeOptions): Promise<ServeHandle> {
     (sessionId) => broadcastChat(clients, sessionId),
   );
 
+  const token = options.token === undefined ? randomBytes(24).toString("base64url") : options.token;
   const server = createServer((req, res) => {
-    handle(req, res, { sources, store, chat, chatRuntime, clients, cwd, config, configPath, boundHost: host }).catch((err) => {
+    handle(req, res, { sources, store, chat, chatRuntime, clients, cwd, config, configPath, boundHost: host, token }).catch((err) => {
       try {
         sendJson(res, 500, { error: (err as Error).message ?? "internal error" });
       } catch {
@@ -341,6 +366,7 @@ export function startServer(options: ServeOptions): Promise<ServeHandle> {
       const shown = host === "0.0.0.0" || host === "::" ? "localhost" : host;
       resolve({
         url: `http://${shown}:${boundPort}`,
+        token,
         port: boundPort,
         host,
         close: () => closeServer(server, clients, tick, watcher, chatRuntime),
@@ -379,6 +405,7 @@ interface HandleContext {
   configPath: string | null;
   /** The address the server was bound to (drives the write/Host policy). */
   boundHost: string;
+  token: string | null;
 }
 
 async function handle(req: IncomingMessage, res: ServerResponse, ctx: HandleContext): Promise<void> {
@@ -400,9 +427,14 @@ async function handle(req: IncomingMessage, res: ServerResponse, ctx: HandleCont
       }
     }
 
+    // The page is the static client and holds no data. Everything else needs the token.
     if (method === "GET" && (path === "/" || path === "/index.html")) {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(DASHBOARD_HTML);
+      return;
+    }
+    if (ctx.token !== null && !hasToken(req, url, ctx.token)) {
+      sendJson(res, 401, { error: "missing or wrong token: open the URL that odw serve printed" });
       return;
     }
     if (method === "GET" && path === "/api/runs") {

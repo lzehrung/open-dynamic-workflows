@@ -16,9 +16,10 @@
  */
 
 import { spawn } from "node:child_process";
-import { readFileSync, realpathSync } from "node:fs";
-import { basename, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
 import { loadConfig, resolveAdapter, resolveRunsRoot } from "./adapters/config.js";
@@ -580,22 +581,38 @@ async function cmdServe(rest: string[]): Promise<number> {
     config,
     configPath: values.config ?? null,
   });
-  process.stdout.write(`odw dashboard → ${handle.url}\n`);
+  const url = handle.token ? `${handle.url}/?token=${handle.token}` : handle.url;
+  process.stdout.write(`odw dashboard → ${url}\n`);
   process.stdout.write(`  watching ${store.root}\n`);
   const bindWarning = nonLoopbackBindWarning(host);
   if (bindWarning) process.stderr.write(`${bindWarning}\n`);
   process.stdout.write("  press Ctrl-C to stop\n");
-  if (values.open) openBrowser(handle.url);
+  const openFile = values.open ? writeOpenFile(url) : null;
+  if (openFile) openBrowser(pathToFileURL(openFile).href);
 
   await new Promise<void>((resolve) => {
     const shutdown = () => {
       process.stdout.write("\nshutting down…\n");
+      if (openFile) rmSync(join(openFile, ".."), { recursive: true, force: true });
       handle.close().then(resolve);
     };
     process.once("SIGINT", shutdown);
     process.once("SIGTERM", shutdown);
   });
   return 0;
+}
+
+/**
+ * Write a page that redirects to `url`, in a new directory only the user can
+ * read. The browser opener gets the file path, so the token never appears in a
+ * process's arguments, which other users may see.
+ */
+export function writeOpenFile(url: string): string {
+  const dir = mkdtempSync(join(tmpdir(), "odw-open-"));
+  const file = join(dir, "open.html");
+  const target = url.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+  writeFileSync(file, `<!doctype html><meta http-equiv="refresh" content="0;url=${target}">\n`, { mode: 0o600 });
+  return file;
 }
 
 /** Best-effort: open `url` in the platform default browser; failures are silent. */

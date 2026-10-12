@@ -262,7 +262,8 @@ ODW is responsible for:
 
 - the processes it starts: timeouts, output limits, and `odw stop` end each
   agent and every process it started;
-- its dashboard server: it listens on 127.0.0.1 by default;
+- its dashboard server: it listens on 127.0.0.1 by default, and every API request
+  needs the token in the URL that `odw serve` prints;
 - the run data it stores: it is readable only by your user;
 - documenting what it passes to each CLI.
 
@@ -287,9 +288,9 @@ ODW is responsible for:
 **Where your data goes.**
 
 - `odw serve` with any `--host` other than 127.0.0.1, localhost, or ::1: anyone
-  who can reach the port can read runs, workflow sources, chat transcripts, and
-  settings (adapter commands and local paths), with no authentication. Writes
-  are refused.
+  who can reach the port and has the printed URL can read runs, workflow
+  sources, chat transcripts, and settings (adapter commands and local paths).
+  Traffic is not encrypted. Writes are refused.
 - The dashboard also shows Claude Code runs from every project in
   `~/.claude/projects` (or `$CLAUDE_CONFIG_DIR/projects`). Set
   `claudeJobsScope: "project"` to show only the served repository.
@@ -342,7 +343,7 @@ run directory — phase columns, per-agent cards (adapter + elapsed time), and r
 stream in real time over SSE. No build step, no extra deps.
 
 ```bash
-odw serve [--open]                      # live dashboard at http://127.0.0.1:4317
+odw serve [--open]                      # live dashboard; open the URL it prints (it holds the token)
 odw serve --port 8080 --host 0.0.0.0    # custom port / bind address
 ```
 
@@ -622,9 +623,11 @@ no token billing of its own, no network calls from the engine.
 <details>
 <summary><b>Can a web page drive my local agents through <code>odw serve</code>?</b></summary>
 
-No. Write endpoints require <code>Content-Type: application/json</code> and a
+No. Every API request needs the token in the URL that <code>odw serve</code> prints. The
+dashboard keeps it in the tab's session storage, which other sites and ports cannot read.
+Write endpoints also require <code>Content-Type: application/json</code> and a
 same-origin Origin, the Host header is allowlisted against DNS rebinding, and
-any off-loopback bind refuses writes entirely (the dashboard stays readable).
+any off-loopback bind refuses writes entirely.
 </details>
 
 <details>

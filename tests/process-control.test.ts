@@ -1032,7 +1032,7 @@ async function closeServerDuringChatTurn(dir: string, codex: string, ready: stri
   const proj = join(dir, "proj");
   mkdirSync(proj);
   const store = new RunStore(join(dir, "runs"));
-  const handle = await startServer({
+  const handle = await startServer({ token: null,
     store,
     port: 0,
     host: "127.0.0.1",
